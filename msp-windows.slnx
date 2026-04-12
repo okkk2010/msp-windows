@@ -1,0 +1,6 @@
+<Solution>
+  <Folder Name="/솔루션 항목/">
+    <File Path="SPECIFICATION.md" />
+  </Folder>
+  <Project Path="msp-windows/msp-windows.csproj" Id="1d93a5fa-2f89-4eb1-9039-4b4a995d24cb" />
+</Solution>

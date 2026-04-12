@@ -1,0 +1,35 @@
+## Visual Studio
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+## Build output
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+
+## NuGet
+packages/
+*.nupkg
+*.snupkg
+project.assets.json
+project.nuget.cache
+
+## Test output
+TestResults/
+*.trx
+
+## Rider / ReSharper
+_ReSharper*/
+*.DotSettings.user
+
+## Files generated at runtime
+overlaySettings.json
+colorPalette.json
+
+## OS files
+.DS_Store
+Thumbs.db
