@@ -2,11 +2,14 @@
 using System.Drawing;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
+using msp_windows.Overlay.Models;
 
 public class OverlayForm : Form
 {
     private static OverlayForm instance;
     public static OverlayForm Instance => instance;
+
+    public static OverlayDocument CurrentOverlayDocument { get; set; }
 
     // 전역 색상 프로퍼티 (기본 빨간색)
     public static Color SelectedOverlayColor { get; set; } = Color.FromArgb( 255, 192, 0, 0 );
@@ -90,8 +93,13 @@ public class OverlayForm : Form
     protected override void OnPaint(PaintEventArgs e)
     {
         e.Graphics.Clear(this.BackColor);
-        // 선택한 색상(SelectedOverlayColor)을 사용하여 UI를 그림
-        Renderer.DrawOverlayUI(e.Graphics, this.ClientRectangle);
+        if (CurrentOverlayDocument != null) {
+            Renderer.DrawOverlayDocument(e.Graphics, this.ClientRectangle, CurrentOverlayDocument);
+        }
+        else {
+            // 선택한 색상(SelectedOverlayColor)을 사용하여 UI를 그림
+            Renderer.DrawOverlayUI(e.Graphics, this.ClientRectangle);
+        }
     }
 
     private void TrackGameWindow(object sender, EventArgs e)

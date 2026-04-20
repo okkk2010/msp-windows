@@ -1,6 +1,21 @@
 <Solution>
-  <Folder Name="/솔루션 항목/">
-    <File Path="SPECIFICATION.md" />
+  <Folder Name="/.github/">
+    <File Path="copilot-instructions.md" />
+  </Folder>
+  <Folder Name="/docs/" />
+  <Folder Name="/docs/msp_windows_client_md/">
+    <File Path="docs/msp_windows_client_md/00_current_implementation_spec.md" />
+    <File Path="docs/msp_windows_client_md/01_windows_client_overview.md" />
+    <File Path="docs/msp_windows_client_md/02_windows_code_load_spec.md" />
+    <File Path="docs/msp_windows_client_md/03_windows_google_login_spec.md" />
+    <File Path="docs/msp_windows_client_md/04_windows_library_spec.md" />
+    <File Path="docs/msp_windows_client_md/05_windows_overlay_apply_rendering_spec.md" />
+    <File Path="docs/msp_windows_client_md/06_windows_local_settings_cache_spec.md" />
+    <File Path="docs/msp_windows_client_md/07_windows_remote_control_ui_spec.md" />
+    <File Path="docs/msp_windows_client_md/08_windows_api_contract_spec.md" />
+    <File Path="docs/msp_windows_client_md/09_windows_internal_structure_spec.md" />
+    <File Path="docs/msp_windows_client_md/10_windows_exception_test_completion_spec.md" />
+    <File Path="docs/msp_windows_client_md/msp_overlay_windows_client_spec.md" />
   </Folder>
   <Project Path="msp-windows/msp-windows.csproj" Id="1d93a5fa-2f89-4eb1-9039-4b4a995d24cb" />
 </Solution>

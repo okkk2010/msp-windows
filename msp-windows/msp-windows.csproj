@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
   <PropertyGroup>
@@ -44,6 +44,7 @@
     <Reference Include="System.Deployment" />
     <Reference Include="System.Drawing" />
     <Reference Include="System.Net.Http" />
+    <Reference Include="System.Runtime.Serialization" />
     <Reference Include="System.Windows.Forms" />
     <Reference Include="System.Xml" />
   </ItemGroup>
@@ -64,6 +65,8 @@
     <Compile Include="RemoteControlForm.cs" />
     <Compile Include="Renderer.cs" />
     <Compile Include="SettingsManager.cs" />
+    <Compile Include="Settings\AppSettings.cs" />
+    <Compile Include="Settings\AppSettingsService.cs" />
     <Compile Include="WinApiHelper.cs" />
     <Compile Include="WindowTracker.cs" />
     <EmbeddedResource Include="OverlayForm.resx">
@@ -93,6 +96,23 @@
       <DependentUpon>Settings.settings</DependentUpon>
       <DesignTimeSharedInput>True</DesignTimeSharedInput>
     </Compile>
+    <Compile Include="Api\ApiResponse.cs" />
+    <Compile Include="Api\MspApiClient.cs" />
+    <Compile Include="Api\Dtos\OverlayDetailResponse.cs" />
+    <Compile Include="Api\Dtos\UserMeResponse.cs" />
+    <Compile Include="Api\Dtos\LibraryItemResponse.cs" />
+    <Compile Include="Overlay\OverlayJsonParser.cs" />
+    <Compile Include="Overlay\OverlayApplyService.cs" />
+    <Compile Include="Overlay\OverlayCacheService.cs" />
+    <Compile Include="Overlay\Models\OverlayDocument.cs" />
+    <Compile Include="Overlay\Models\OverlayCanvas.cs" />
+    <Compile Include="Overlay\Models\OverlaySettings.cs" />
+    <Compile Include="Overlay\Models\OverlayGame.cs" />
+    <Compile Include="Overlay\Models\OverlayMeta.cs" />
+    <Compile Include="Overlay\Models\OverlayElementBase.cs" />
+    <Compile Include="Overlay\Models\RectElement.cs" />
+    <Compile Include="Overlay\Models\CircleElement.cs" />
+    <Compile Include="Overlay\Models\LineElement.cs" />
   </ItemGroup>
   <ItemGroup>
     <None Include="App.config" />
