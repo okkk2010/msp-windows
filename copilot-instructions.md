@@ -1,5 +1,12 @@
 # Copilot Instructions for msp overlay
 
+## Working Rules
+- Before editing, summarize the task scope.
+- Do not implement features outside the requested scope.
+- Do not invent requirements.
+- If requirements are unclear, leave TODO comments instead of making large assumptions.
+- After editing, show changed files and verification steps.
+
 ## Project Overview
 
 This repository is for msp overlay, a Windows desktop overlay client for reducing motion sickness in 3D games.
