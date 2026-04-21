@@ -4,6 +4,7 @@
   </Folder>
   <Folder Name="/docs/" />
   <Folder Name="/docs/msp_windows_client_md/">
+    <File Path="02-1_windows_local_overlay_load_spec.md" />
     <File Path="docs/msp_windows_client_md/00_current_implementation_spec.md" />
     <File Path="docs/msp_windows_client_md/01_windows_client_overview.md" />
     <File Path="docs/msp_windows_client_md/02_windows_code_load_spec.md" />

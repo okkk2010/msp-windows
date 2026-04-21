@@ -2,12 +2,13 @@
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
+using System.IO;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using msp_windows.Api;
-using msp_windows.Settings;
 using msp_windows.Overlay;
+using msp_windows.Settings;
 
 public class ProcessItem
 {
@@ -26,6 +27,7 @@ public class RemoteControlForm : Form
     private TextBox overlayCodeTextBox;
     private Button loadByCodeButton;
     private Label codeLoadStatusLabel;
+    private ComboBox loadedOverlayList;
 
     private Button selectColorButton;
     private FlowLayoutPanel palettePanel; // 저장된 색상 스와치를 보여줄 영역
@@ -37,10 +39,8 @@ public class RemoteControlForm : Form
     private static readonly Regex OverlayCodeRegex = new Regex("^[A-Z0-9]{6}$", RegexOptions.Compiled);
 
     private readonly AppSettingsService appSettingsService = new AppSettingsService();
-    private readonly OverlayJsonParser overlayJsonParser = new OverlayJsonParser();
-    private readonly OverlayApplyService overlayApplyService = new OverlayApplyService();
     private readonly OverlayCacheService overlayCacheService = new OverlayCacheService();
-    private string lastLoadedOverlayJson;
+    private string loadedOverlayStorePath;
 
     public RemoteControlForm()
     {
@@ -67,11 +67,20 @@ public class RemoteControlForm : Form
 
         codeLoadStatusLabel = new Label() { Text = "", Top = 170, Left = 20, Width = 320, Height = 20 };
 
-        selectColorButton = new Button() { Text = "색상 선택", Top = 200, Left = 20, Width = 320 };
+        Label loadedOverlayLabel = new Label() { Text = "불러온 오버레이 (Code | Title)", Top = 195, Left = 20, Width = 320 };
+        loadedOverlayList = new ComboBox() {
+            Top = 220,
+            Left = 20,
+            Width = 320,
+            DropDownStyle = ComboBoxStyle.DropDownList
+        };
+        loadedOverlayList.DropDown += (s, e) => LoadLoadedOverlaysFromStore();
+
+        selectColorButton = new Button() { Text = "색상 선택", Top = 255, Left = 20, Width = 320 };
         selectColorButton.Click += SelectColorButton_Click;
 
         palettePanel = new FlowLayoutPanel();
-        palettePanel.Location = new Point(20, 240);
+        palettePanel.Location = new Point(20, 295);
         palettePanel.Size = new Size(320, 260); // 5개 x 64px(스와치+라벨+마진) = 320px, 2줄(128~260px)
         palettePanel.BorderStyle = BorderStyle.FixedSingle;
         palettePanel.FlowDirection = FlowDirection.LeftToRight;
@@ -95,6 +104,8 @@ public class RemoteControlForm : Form
         Controls.Add(overlayCodeTextBox);
         Controls.Add(loadByCodeButton);
         Controls.Add(codeLoadStatusLabel);
+        Controls.Add(loadedOverlayLabel);
+        Controls.Add(loadedOverlayList);
         Controls.Add(selectColorButton);
         Controls.Add(palettePanel);
         Controls.Add(errorLogTextBox);
@@ -114,6 +125,8 @@ public class RemoteControlForm : Form
 
         // settings.json 로드/생성 (없으면 기본값으로 생성)
         appSettingsService.LoadOrCreate();
+        loadedOverlayStorePath = Path.Combine(appSettingsService.SettingsDirectoryPath, "loaded-overlays.txt");
+        LoadLoadedOverlaysFromStore();
     }
 
     private async void LoadByCodeButton_Click(object sender, EventArgs e)
@@ -151,33 +164,212 @@ public class RemoteControlForm : Form
                 return;
             }
 
-            lastLoadedOverlayJson = resp.Data.OverlayJson;
-
-            if (string.IsNullOrWhiteSpace(lastLoadedOverlayJson)) {
-                string msg = "overlayJson is missing in server response.";
-                codeLoadStatusLabel.Text = msg;
-                ErrorLogger.LogError("E211", msg);
-                return;
-            }
-
-            try {
-                var document = overlayJsonParser.Parse(lastLoadedOverlayJson);
-                overlayApplyService.Apply(document);
-                overlayCacheService.SaveOverlayJson(document.OverlayId, lastLoadedOverlayJson);
-                appSettingsService.UpdateLastSelectedOverlayId(document.OverlayId);
-            }
-            catch (Exception ex) {
-                codeLoadStatusLabel.Text = ex.Message;
-                ErrorLogger.LogError("E212", ex.ToString());
-                return;
-            }
-
-            if (!string.IsNullOrWhiteSpace(resp.Data.OverlayId)) {
-                appSettingsService.UpdateLastSelectedOverlayId(resp.Data.OverlayId);
-            }
-
-            codeLoadStatusLabel.Text = $"Overlay loaded: {resp.Data.Name}";
+            AddOrSelectLoadedOverlay(resp.Data);
+            codeLoadStatusLabel.Text = $"Overlay selected: {resp.Data.Code} | {resp.Data.Name}";
         }
+    }
+
+    private void AddOrSelectLoadedOverlay(msp_windows.Api.Dtos.OverlayDetailResponse overlay)
+    {
+        if (overlay == null) {
+            return;
+        }
+
+        string code = string.IsNullOrWhiteSpace(overlay.Code) ? "UNKNOWN" : overlay.Code.Trim().ToUpperInvariant();
+        string title = string.IsNullOrWhiteSpace(overlay.Name) ? "(제목 없음)" : overlay.Name.Trim();
+
+        for (int i = 0; i < loadedOverlayList.Items.Count; i++) {
+            LoadedOverlayItem existing = loadedOverlayList.Items[i] as LoadedOverlayItem;
+            if (existing == null) {
+                continue;
+            }
+
+            if (string.Equals(existing.Code, code, StringComparison.OrdinalIgnoreCase)) {
+                existing.Title = title;
+                existing.OverlayId = overlay.OverlayId;
+                loadedOverlayList.Items[i] = existing;
+                loadedOverlayList.SelectedIndex = i;
+                SaveLoadedOverlaysToStore();
+                return;
+            }
+        }
+
+        LoadedOverlayItem item = new LoadedOverlayItem {
+            Code = code,
+            Title = title,
+            OverlayId = overlay.OverlayId
+        };
+
+        loadedOverlayList.Items.Add(item);
+        loadedOverlayList.SelectedIndex = loadedOverlayList.Items.Count - 1;
+        SaveLoadedOverlaysToStore();
+    }
+
+    private void LoadLoadedOverlaysFromStore()
+    {
+        loadedOverlayList.Items.Clear();
+
+        if (string.IsNullOrWhiteSpace(loadedOverlayStorePath) || !File.Exists(loadedOverlayStorePath)) {
+            return;
+        }
+
+        try {
+            string[] lines = File.ReadAllLines(loadedOverlayStorePath);
+            foreach (string raw in lines) {
+                if (string.IsNullOrWhiteSpace(raw)) {
+                    continue;
+                }
+
+                string[] parts = raw.Split(new[] { '|' }, 3);
+                if (parts.Length < 2) {
+                    continue;
+                }
+
+                LoadedOverlayItem item = new LoadedOverlayItem {
+                    Code = Unescape(parts[0]),
+                    Title = Unescape(parts[1]),
+                    OverlayId = parts.Length > 2 ? Unescape(parts[2]) : null
+                };
+
+                if (string.IsNullOrWhiteSpace(item.Code)) {
+                    continue;
+                }
+
+                if (string.IsNullOrWhiteSpace(item.Title)) {
+                    item.Title = "(제목 없음)";
+                }
+
+                AddLoadedOverlayListItemIfMissing(item);
+            }
+
+            MergeLoadedOverlaysFromCacheDirectory();
+
+            if (loadedOverlayList.Items.Count > 0 && loadedOverlayList.SelectedIndex < 0) {
+                loadedOverlayList.SelectedIndex = 0;
+            }
+        }
+        catch (Exception ex) {
+            ErrorLogger.LogError("E213", "불러온 오버레이 목록 로드 실패: " + ex.Message);
+        }
+    }
+
+    private void SaveLoadedOverlaysToStore()
+    {
+        if (string.IsNullOrWhiteSpace(loadedOverlayStorePath)) {
+            return;
+        }
+
+        try {
+            Directory.CreateDirectory(Path.GetDirectoryName(loadedOverlayStorePath));
+
+            List<string> lines = new List<string>();
+            foreach (object obj in loadedOverlayList.Items) {
+                LoadedOverlayItem item = obj as LoadedOverlayItem;
+                if (item == null || string.IsNullOrWhiteSpace(item.Code)) {
+                    continue;
+                }
+
+                string line = Escape(item.Code) + "|" + Escape(item.Title) + "|" + Escape(item.OverlayId);
+                lines.Add(line);
+            }
+
+            File.WriteAllLines(loadedOverlayStorePath, lines.ToArray());
+        }
+        catch (Exception ex) {
+            ErrorLogger.LogError("E214", "불러온 오버레이 목록 저장 실패: " + ex.Message);
+        }
+    }
+
+    private static string Escape(string value)
+    {
+        return Uri.EscapeDataString(value ?? string.Empty);
+    }
+
+    private static string Unescape(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) {
+            return string.Empty;
+        }
+
+        return Uri.UnescapeDataString(value);
+    }
+
+    private void MergeLoadedOverlaysFromCacheDirectory()
+    {
+        string cacheRoot = overlayCacheService.RootCacheDirectoryPath;
+        if (!Directory.Exists(cacheRoot)) {
+            return;
+        }
+
+        string[] overlayDirs = Directory.GetDirectories(cacheRoot);
+        foreach (string overlayDir in overlayDirs) {
+            string overlayId = Path.GetFileName(overlayDir);
+            string overlayJsonPath = Path.Combine(overlayDir, "overlay.json");
+
+            string code = overlayId;
+            string title = "(캐시 오버레이)";
+
+            if (File.Exists(overlayJsonPath)) {
+                try {
+                    string json = File.ReadAllText(overlayJsonPath);
+                    string parsedCode = TryExtractJsonStringValue(json, "code", "overlayCode");
+                    string parsedTitle = TryExtractJsonStringValue(json, "name", "title", "overlayName");
+
+                    if (!string.IsNullOrWhiteSpace(parsedCode)) {
+                        code = parsedCode.Trim().ToUpperInvariant();
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(parsedTitle)) {
+                        title = parsedTitle.Trim();
+                    }
+                }
+                catch {
+                }
+            }
+
+            AddLoadedOverlayListItemIfMissing(new LoadedOverlayItem {
+                Code = code,
+                Title = title,
+                OverlayId = overlayId
+            });
+        }
+    }
+
+    private string TryExtractJsonStringValue(string json, params string[] keys)
+    {
+        if (string.IsNullOrWhiteSpace(json) || keys == null || keys.Length == 0) {
+            return null;
+        }
+
+        foreach (string key in keys) {
+            string pattern = "\"" + Regex.Escape(key) + "\"\\s*:\\s*\"(?<value>[^\"]*)\"";
+            Match match = Regex.Match(json, pattern, RegexOptions.IgnoreCase);
+            if (match.Success) {
+                return match.Groups["value"].Value;
+            }
+        }
+
+        return null;
+    }
+
+    private void AddLoadedOverlayListItemIfMissing(LoadedOverlayItem item)
+    {
+        if (item == null || string.IsNullOrWhiteSpace(item.Code)) {
+            return;
+        }
+
+        for (int i = 0; i < loadedOverlayList.Items.Count; i++) {
+            LoadedOverlayItem existing = loadedOverlayList.Items[i] as LoadedOverlayItem;
+            if (existing == null) {
+                continue;
+            }
+
+            if (string.Equals(existing.Code, item.Code, StringComparison.OrdinalIgnoreCase)) {
+                return;
+            }
+        }
+
+        loadedOverlayList.Items.Add(item);
     }
 
     private void LoadRunningProcesses()
@@ -309,5 +501,17 @@ public class RemoteControlForm : Form
         SettingsManager.SaveOverlayColor(color);
         OverlayForm.SelectedOverlayColor = color;
         OverlayForm.Instance?.Invalidate();
+    }
+
+    private sealed class LoadedOverlayItem
+    {
+        public string Code { get; set; }
+        public string Title { get; set; }
+        public string OverlayId { get; set; }
+
+        public override string ToString()
+        {
+            return $"{Code} | {Title}";
+        }
     }
 }
