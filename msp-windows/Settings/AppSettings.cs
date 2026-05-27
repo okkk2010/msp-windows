@@ -9,7 +9,7 @@ namespace msp_windows.Settings
         {
             return new AppSettings
             {
-                ServerBaseUrl = "http://localhost:8080",
+                ServerBaseUrl = "https://api.msp-overlay.store:8080",
                 AccessToken = null,
                 LastSelectedOverlayId = null,
                 CacheEnabled = true
