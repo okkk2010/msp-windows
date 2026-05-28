@@ -75,6 +75,7 @@ public class RemoteControlForm : Form
             DropDownStyle = ComboBoxStyle.DropDownList
         };
         loadedOverlayList.DropDown += (s, e) => LoadLoadedOverlaysFromStore();
+        loadedOverlayList.SelectedIndexChanged += LoadedOverlayList_SelectedIndexChanged;
 
         selectColorButton = new Button() { Text = "색상 선택", Top = 255, Left = 20, Width = 320 };
         selectColorButton.Click += SelectColorButton_Click;
@@ -165,7 +166,49 @@ public class RemoteControlForm : Form
             }
 
             AddOrSelectLoadedOverlay(resp.Data);
-            codeLoadStatusLabel.Text = $"Overlay selected: {resp.Data.Code} | {resp.Data.Name}";
+
+            try {
+                if (!string.IsNullOrWhiteSpace(resp.Data.OverlayJson)) {
+                    // 1. JSON 캐시에 저장
+                    overlayCacheService.SaveOverlayJson(resp.Data.OverlayId, resp.Data.OverlayJson);
+
+                    // 2. JSON 파싱
+                    var parser = new OverlayJsonParser();
+                    var doc = parser.Parse(resp.Data.OverlayJson);
+
+                    // 3. 오버레이 적용
+                    var applyService = new OverlayApplyService();
+                    applyService.Apply(doc);
+
+                    codeLoadStatusLabel.Text = $"오버레이 로드 및 적용 완료: {resp.Data.Code} | {doc.Name}";
+                } else {
+                    codeLoadStatusLabel.Text = $"Overlay selected: {resp.Data.Code} | {resp.Data.Name} (JSON 없음)";
+                }
+            }
+            catch (Exception ex) {
+                ErrorLogger.LogError("E220", "오버레이 파싱 또는 적용 실패: " + ex.Message);
+                codeLoadStatusLabel.Text = "오버레이 적용 중 오류가 발생했습니다.";
+            }
+        }
+    }
+
+    private void LoadedOverlayList_SelectedIndexChanged(object sender, EventArgs e)
+    {
+        var item = loadedOverlayList.SelectedItem as LoadedOverlayItem;
+        if (item == null || string.IsNullOrWhiteSpace(item.OverlayId)) return;
+
+        try {
+            string json = overlayCacheService.TryLoadOverlayJson(item.OverlayId);
+            if (!string.IsNullOrWhiteSpace(json)) {
+                var parser = new OverlayJsonParser();
+                var doc = parser.Parse(json);
+
+                var applyService = new OverlayApplyService();
+                applyService.Apply(doc);
+            }
+        }
+        catch (Exception ex) {
+            ErrorLogger.LogError("E221", "로컬 오버레이 파싱 또는 적용 실패: " + ex.Message);
         }
     }
 
