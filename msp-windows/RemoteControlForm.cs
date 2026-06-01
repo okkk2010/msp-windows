@@ -165,25 +165,29 @@ public class RemoteControlForm : Form
                 return;
             }
 
-            AddOrSelectLoadedOverlay(resp.Data);
-
             try {
-                if (!string.IsNullOrWhiteSpace(resp.Data.OverlayJson)) {
-                    // 1. JSON 캐시에 저장
-                    overlayCacheService.SaveOverlayJson(resp.Data.Code, resp.Data.OverlayJson);
-
-                    // 2. JSON 파싱
-                    var parser = new OverlayJsonParser();
-                    var doc = parser.Parse(resp.Data.OverlayJson);
-
-                    // 3. 오버레이 적용
-                    var applyService = new OverlayApplyService();
-                    applyService.Apply(doc);
-
-                    codeLoadStatusLabel.Text = $"오버레이 로드 및 적용 완료: {resp.Data.Code} | {doc.Name}";
-                } else {
-                    codeLoadStatusLabel.Text = $"Overlay selected: {resp.Data.Code} | {resp.Data.Name} (JSON 없음)";
+                if (string.IsNullOrWhiteSpace(resp.Data.OverlayJson)) {
+                    codeLoadStatusLabel.Text = "서버 응답에 overlayJson이 없습니다.";
+                    ErrorLogger.LogError("E211", "Code Load overlayJson empty: " + resp.Data.Code);
+                    return;
                 }
+
+                // 1. JSON 파싱으로 적용 가능한 문서인지 먼저 확인
+                var parser = new OverlayJsonParser();
+                var doc = parser.Parse(resp.Data.OverlayJson);
+
+                // 2. 파싱된 JSON만 캐시에 저장
+                overlayCacheService.SaveOverlayJson(resp.Data.Code, resp.Data.OverlayJson);
+
+                // 3. 오버레이 적용
+                var applyService = new OverlayApplyService();
+                applyService.Apply(doc);
+
+                // 4. 성공한 항목만 목록/settings에 반영
+                AddOrSelectLoadedOverlay(resp.Data);
+                appSettingsService.UpdateLastSelectedOverlayId(GetOverlaySelectionId(resp.Data, doc.OverlayId));
+
+                codeLoadStatusLabel.Text = "오버레이 로드 및 적용 완료: " + resp.Data.Code + " | " + doc.Name;
             }
             catch (Exception ex) {
                 ErrorLogger.LogError("E220", "오버레이 파싱 또는 적용 실패: " + ex.Message);
@@ -205,6 +209,8 @@ public class RemoteControlForm : Form
 
                 var applyService = new OverlayApplyService();
                 applyService.Apply(doc);
+
+                appSettingsService.UpdateLastSelectedOverlayId(string.IsNullOrWhiteSpace(item.OverlayId) ? item.Code : item.OverlayId);
             }
         }
         catch (Exception ex) {
@@ -246,6 +252,23 @@ public class RemoteControlForm : Form
         loadedOverlayList.Items.Add(item);
         loadedOverlayList.SelectedIndex = loadedOverlayList.Items.Count - 1;
         SaveLoadedOverlaysToStore();
+    }
+
+    private static string GetOverlaySelectionId(msp_windows.Api.Dtos.OverlayDetailResponse overlay, string parsedOverlayId)
+    {
+        if (overlay != null && !string.IsNullOrWhiteSpace(overlay.OverlayId)) {
+            return overlay.OverlayId;
+        }
+
+        if (!string.IsNullOrWhiteSpace(parsedOverlayId)) {
+            return parsedOverlayId;
+        }
+
+        if (overlay != null && !string.IsNullOrWhiteSpace(overlay.Code)) {
+            return overlay.Code;
+        }
+
+        return null;
     }
 
     private void LoadLoadedOverlaysFromStore()
