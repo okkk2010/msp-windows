@@ -1,6 +1,7 @@
-﻿using System.Drawing;
+using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Globalization;
+using System.Text.RegularExpressions;
 using msp_windows.Overlay.Models;
 
 public static class Renderer
@@ -14,7 +15,7 @@ public static class Renderer
 
             g.FillRectangle(brush, bounds.Width / 2 - rectSize / 2, 0, rectSize, rectSize);
             g.FillRectangle(brush, 0, bounds.Height / 2 - rectSize / 2, rectSize, rectSize);
-            g.FillRectangle(brush, bounds.Width / 2 - rectSize / 2, bounds.Height - rectSize, rectSize, rectSize);            
+            g.FillRectangle(brush, bounds.Width / 2 - rectSize / 2, bounds.Height - rectSize, rectSize, rectSize);
             g.FillRectangle(brush, bounds.Width - rectSize, bounds.Height / 2 - rectSize / 2, rectSize, rectSize);
 
             g.FillRectangle(brush, bounds.Width / 2 - midRectSize / 2, bounds.Height / 2 - midRectSize - offset, midRectSize, midRectSize);
@@ -68,18 +69,21 @@ public static class Renderer
             (float)(rect.Y * scaleY),
             (float)(rect.Width * scaleX),
             (float)(rect.Height * scaleY));
+        float scaledCornerRadius = (float)(rect.CornerRadius * ((scaleX + scaleY) / 2.0));
 
         DrawWithRotation(g, r, rect.Rotation, () =>
         {
-            if (!string.IsNullOrWhiteSpace(rect.FillColor)) {
-                using (var b = new SolidBrush(ApplyOpacity(ParseColor(rect.FillColor), opacity))) {
-                    g.FillRectangle(b, r);
+            using (var path = BuildRoundedRectanglePath(r, scaledCornerRadius)) {
+                if (!string.IsNullOrWhiteSpace(rect.FillColor)) {
+                    using (var b = new SolidBrush(ApplyOpacity(ParseColor(rect.FillColor), opacity))) {
+                        g.FillPath(b, path);
+                    }
                 }
-            }
 
-            if (!string.IsNullOrWhiteSpace(rect.StrokeColor) && rect.StrokeWidth > 0) {
-                using (var p = new Pen(ApplyOpacity(ParseColor(rect.StrokeColor), opacity), (float)(rect.StrokeWidth * ((scaleX + scaleY) / 2.0)))) {
-                    g.DrawRectangle(p, r.X, r.Y, r.Width, r.Height);
+                if (!string.IsNullOrWhiteSpace(rect.StrokeColor) && rect.StrokeWidth > 0) {
+                    using (var p = new Pen(ApplyOpacity(ParseColor(rect.StrokeColor), opacity), (float)(rect.StrokeWidth * ((scaleX + scaleY) / 2.0)))) {
+                        g.DrawPath(p, path);
+                    }
                 }
             }
         });
@@ -155,6 +159,14 @@ public static class Renderer
         if (string.IsNullOrWhiteSpace(value)) return Color.Empty;
 
         value = value.Trim();
+        if (value.StartsWith("rgba", System.StringComparison.OrdinalIgnoreCase)) {
+            return ParseRgbaColor(value);
+        }
+
+        if (value.StartsWith("rgb", System.StringComparison.OrdinalIgnoreCase)) {
+            return ParseRgbColor(value);
+        }
+
         if (value.StartsWith("#")) {
             string hex = value.Substring(1);
 
@@ -175,6 +187,42 @@ public static class Renderer
         }
 
         return Color.Empty;
+    }
+
+    private static Color ParseRgbaColor(string value)
+    {
+        Match match = Regex.Match(
+            value,
+            @"^rgba\(\s*(?<r>\d+)\s*,\s*(?<g>\d+)\s*,\s*(?<b>\d+)\s*,\s*(?<a>[\d.]+)\s*\)$",
+            RegexOptions.IgnoreCase);
+
+        if (!match.Success) {
+            return Color.Empty;
+        }
+
+        int r = ClampByte(ParseInt(match.Groups["r"].Value));
+        int g = ClampByte(ParseInt(match.Groups["g"].Value));
+        int b = ClampByte(ParseInt(match.Groups["b"].Value));
+        double alpha = ParseDouble(match.Groups["a"].Value);
+        int a = ClampByte((int)System.Math.Round(Clamp01(alpha) * 255.0));
+        return Color.FromArgb(a, r, g, b);
+    }
+
+    private static Color ParseRgbColor(string value)
+    {
+        Match match = Regex.Match(
+            value,
+            @"^rgb\(\s*(?<r>\d+)\s*,\s*(?<g>\d+)\s*,\s*(?<b>\d+)\s*\)$",
+            RegexOptions.IgnoreCase);
+
+        if (!match.Success) {
+            return Color.Empty;
+        }
+
+        int r = ClampByte(ParseInt(match.Groups["r"].Value));
+        int g = ClampByte(ParseInt(match.Groups["g"].Value));
+        int b = ClampByte(ParseInt(match.Groups["b"].Value));
+        return Color.FromArgb(255, r, g, b);
     }
 
     private static Color ApplyOpacity(Color color, double opacity)
@@ -209,5 +257,49 @@ public static class Renderer
         if (value < 0) return 0;
         if (value > 1) return 1;
         return value;
+    }
+
+    private static int ParseInt(string value)
+    {
+        return int.Parse(value, NumberStyles.Integer, CultureInfo.InvariantCulture);
+    }
+
+    private static double ParseDouble(string value)
+    {
+        return double.Parse(value, NumberStyles.Float, CultureInfo.InvariantCulture);
+    }
+
+    private static int ClampByte(int value)
+    {
+        if (value < 0) return 0;
+        if (value > 255) return 255;
+        return value;
+    }
+
+    private static GraphicsPath BuildRoundedRectanglePath(RectangleF rect, float cornerRadius)
+    {
+        var path = new GraphicsPath();
+        float radius = System.Math.Max(0f, cornerRadius);
+        float maxRadius = System.Math.Min(rect.Width, rect.Height) / 2f;
+        radius = System.Math.Min(radius, maxRadius);
+
+        if (radius <= 0f) {
+            path.AddRectangle(rect);
+            path.CloseFigure();
+            return path;
+        }
+
+        float diameter = radius * 2f;
+        var arc = new RectangleF(rect.X, rect.Y, diameter, diameter);
+
+        path.AddArc(arc, 180, 90);
+        arc.X = rect.Right - diameter;
+        path.AddArc(arc, 270, 90);
+        arc.Y = rect.Bottom - diameter;
+        path.AddArc(arc, 0, 90);
+        arc.X = rect.X;
+        path.AddArc(arc, 90, 90);
+        path.CloseFigure();
+        return path;
     }
 }
