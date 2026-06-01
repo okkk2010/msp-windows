@@ -7,9 +7,10 @@
             "type": "process",
             "args": [
                 "build",
-                "${workspaceFolder}/msp-windows/motion sickness prevention program.csproj",
-                "/property:GenerateFullPaths=true",
-                "/consoleloggerparameters:NoSummary;ForceNoAlign"
+                "${workspaceFolder}/msp-windows/msp-windows.csproj",
+                "-c",
+                "Debug",
+                "-p:Platform=AnyCPU"
             ],
             "problemMatcher": "$msCompile"
         },
@@ -18,10 +19,11 @@
             "command": "dotnet",
             "type": "process",
             "args": [
-                "publish",
-                "${workspaceFolder}/msp-windows/motion sickness prevention program.csproj",
-                "/property:GenerateFullPaths=true",
-                "/consoleloggerparameters:NoSummary;ForceNoAlign"
+                "build",
+                "${workspaceFolder}/msp-windows/msp-windows.csproj",
+                "-c",
+                "Release",
+                "-p:Platform=AnyCPU"
             ],
             "problemMatcher": "$msCompile"
         },
@@ -30,10 +32,11 @@
             "command": "dotnet",
             "type": "process",
             "args": [
-                "watch",
-                "run",
-                "--project",
-                "${workspaceFolder}/msp-windows/motion sickness prevention program.csproj"
+                "build",
+                "${workspaceFolder}/msp-windows/msp-windows.csproj",
+                "-c",
+                "Debug",
+                "-p:Platform=AnyCPU"
             ],
             "problemMatcher": "$msCompile"
         }

@@ -14,6 +14,8 @@ namespace msp_windows.Api
 {
     public class MspApiClient : IDisposable
     {
+        private const string AppFolderName = "msp-overlay";
+
         private readonly HttpClient _httpClient;
 
         public MspApiClient(string serverBaseUrl)
@@ -110,7 +112,7 @@ namespace msp_windows.Api
                             return ok;
                         }
 
-                        ErrorLogger.LogError("E202", $"{relativeUrl} invalid response: {status}\n{body}");
+                        LogInvalidResponseDiagnostics(relativeUrl, status, body);
 
                         return new ApiResponse<T>
                         {
@@ -363,6 +365,30 @@ namespace msp_windows.Api
             }
 
             return sb.ToString();
+        }
+
+        private static void LogInvalidResponseDiagnostics(string relativeUrl, string status, string body)
+        {
+            ErrorLogger.LogError("E202", relativeUrl + " invalid response: " + status + Environment.NewLine + body);
+
+            try {
+                string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+                string logDirectoryPath = Path.Combine(appData, AppFolderName, "logs");
+                Directory.CreateDirectory(logDirectoryPath);
+
+                string logFilePath = Path.Combine(logDirectoryPath, "invalid-server-response.log");
+                string logEntry =
+                    "---- " + DateTimeOffset.Now.ToString("O", CultureInfo.InvariantCulture) + " ----" + Environment.NewLine +
+                    "URL: " + relativeUrl + Environment.NewLine +
+                    "Status: " + status + Environment.NewLine +
+                    "Body:" + Environment.NewLine +
+                    body + Environment.NewLine + Environment.NewLine;
+
+                File.AppendAllText(logFilePath, logEntry, Encoding.UTF8);
+            }
+            catch {
+                // Diagnostic file logging must not hide the original API failure.
+            }
         }
 
         public void Dispose()

@@ -1,10 +1,10 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
-using System.Runtime.Serialization.Json;
-using System.Text;
+using System.Web.Script.Serialization;
 using msp_windows.Overlay.Models;
 
 namespace msp_windows.Overlay
@@ -72,6 +72,7 @@ namespace msp_windows.Overlay
             if (value is System.Collections.ArrayList arrayList) return arrayList.Cast<object>();
             if (value is List<object> list) return list;
             if (value is IEnumerable<object> enumerable) return enumerable;
+            if (value is IEnumerable nonGeneric && !(value is string)) return nonGeneric.Cast<object>();
             return null;
         }
 
@@ -203,19 +204,38 @@ namespace msp_windows.Overlay
 
         private static Dictionary<string, object> DeserializeToDictionary(string json)
         {
-            var serializer = new DataContractJsonSerializer(typeof(Dictionary<string, object>), new DataContractJsonSerializerSettings
-            {
-                UseSimpleDictionaryFormat = true
-            });
-
-            using (var ms = new MemoryStream(Encoding.UTF8.GetBytes(json)))
-            {
-                var obj = serializer.ReadObject(ms);
-                if (!(obj is Dictionary<string, object> dict)) {
-                    throw new InvalidDataException("Invalid overlay JSON root.");
-                }
-                return dict;
+            var serializer = new JavaScriptSerializer();
+            var obj = serializer.DeserializeObject(json);
+            var normalized = NormalizeJsonValue(obj) as Dictionary<string, object>;
+            if (normalized == null) {
+                throw new InvalidDataException("Invalid overlay JSON root.");
             }
+
+            return normalized;
+        }
+
+        private static object NormalizeJsonValue(object value)
+        {
+            if (value == null) {
+                return null;
+            }
+
+            var dictionary = value as IDictionary<string, object>;
+            if (dictionary != null) {
+                var normalized = new Dictionary<string, object>(StringComparer.Ordinal);
+                foreach (var pair in dictionary) {
+                    normalized[pair.Key] = NormalizeJsonValue(pair.Value);
+                }
+
+                return normalized;
+            }
+
+            var arrayList = value as ArrayList;
+            if (arrayList != null) {
+                return arrayList.Cast<object>().Select(NormalizeJsonValue).ToList();
+            }
+
+            return value;
         }
 
         private static object GetValue(Dictionary<string, object> dict, string key)
@@ -244,14 +264,53 @@ namespace msp_windows.Overlay
         private static string GetString(Dictionary<string, object> dict, string key)
         {
             var v = GetValue(dict, key);
-            return v?.ToString();
+            return NormalizeStringValue(v);
         }
 
         private static string GetStringOrNull(Dictionary<string, object> dict, string key)
         {
             if (dict == null) return null;
             if (!dict.TryGetValue(key, out var v)) return null;
-            return v?.ToString();
+            return NormalizeStringValue(v);
+        }
+
+        private static string NormalizeStringValue(object value)
+        {
+            if (value == null) {
+                return null;
+            }
+
+            if (value is string text) {
+                return text;
+            }
+
+            if (value is Dictionary<string, object> dict) {
+                if (TryGetDictString(dict, out var nestedText)) {
+                    return nestedText;
+                }
+                return null;
+            }
+
+            return value.ToString();
+        }
+
+        private static bool TryGetDictString(Dictionary<string, object> dict, out string value)
+        {
+            value = null;
+            if (dict == null) {
+                return false;
+            }
+
+            foreach (var key in new[] { "slug", "name", "value", "id" }) {
+                if (dict.TryGetValue(key, out var raw) && raw != null) {
+                    value = raw.ToString();
+                    if (!string.IsNullOrWhiteSpace(value)) {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
         }
 
         private static double GetDouble(Dictionary<string, object> dict, string key)

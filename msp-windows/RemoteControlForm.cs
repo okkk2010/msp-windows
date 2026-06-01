@@ -172,26 +172,48 @@ public class RemoteControlForm : Form
                     return;
                 }
 
-                // 1. JSON 파싱으로 적용 가능한 문서인지 먼저 확인
+                if (!string.IsNullOrWhiteSpace(resp.Data.Platform)
+                    && !string.Equals(resp.Data.Platform.Trim(), "windows", StringComparison.OrdinalIgnoreCase)) {
+                    codeLoadStatusLabel.Text = "Unsupported overlay platform.";
+                    ErrorLogger.LogError("E212", "Unsupported platform: " + resp.Data.Platform + " (code: " + resp.Data.Code + ")");
+                    return;
+                }
+
+                var cacheCode = string.IsNullOrWhiteSpace(resp.Data.Code) ? code : resp.Data.Code.Trim().ToUpperInvariant();
+
+                // 1. 서버에서 받은 원본 JSON을 먼저 캐시에 저장
+                overlayCacheService.SaveOverlayJson(cacheCode, resp.Data.OverlayJson);
+
+                // 2. JSON 파싱으로 적용 가능한 문서인지 확인
                 var parser = new OverlayJsonParser();
                 var doc = parser.Parse(resp.Data.OverlayJson);
-
-                // 2. 파싱된 JSON만 캐시에 저장
-                overlayCacheService.SaveOverlayJson(resp.Data.Code, resp.Data.OverlayJson);
 
                 // 3. 오버레이 적용
                 var applyService = new OverlayApplyService();
                 applyService.Apply(doc);
 
                 // 4. 성공한 항목만 목록/settings에 반영
+                resp.Data.Code = cacheCode;
                 AddOrSelectLoadedOverlay(resp.Data);
                 appSettingsService.UpdateLastSelectedOverlayId(GetOverlaySelectionId(resp.Data, doc.OverlayId));
 
                 codeLoadStatusLabel.Text = "오버레이 로드 및 적용 완료: " + resp.Data.Code + " | " + doc.Name;
             }
             catch (Exception ex) {
-                ErrorLogger.LogError("E220", "오버레이 파싱 또는 적용 실패: " + ex.Message);
-                codeLoadStatusLabel.Text = "오버레이 적용 중 오류가 발생했습니다.";
+                string friendly;
+
+                if (ex is InvalidDataException) {
+                    friendly = ex.Message;
+                }
+                else if (ex is ArgumentException) {
+                    friendly = ex.Message;
+                }
+                else {
+                    friendly = "오버레이 적용 중 오류가 발생했습니다.";
+                }
+
+                ErrorLogger.LogError("E220", "오버레이 파싱 또는 적용 실패 (cache preserved): " + ex);
+                codeLoadStatusLabel.Text = friendly;
             }
         }
     }
