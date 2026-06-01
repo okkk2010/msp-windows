@@ -16,23 +16,22 @@ namespace msp_windows.Overlay
             RootCacheDirectoryPath = Path.Combine(appData, AppFolderName, "cache", "overlays");
         }
 
-        public void SaveOverlayJson(string overlayId, string overlayJson)
+        public void SaveOverlayJson(string code, string overlayJson)
         {
-            if (string.IsNullOrWhiteSpace(overlayId)) throw new ArgumentException("overlayId is required.", nameof(overlayId));
+            if (string.IsNullOrWhiteSpace(code)) throw new ArgumentException("code is required.", nameof(code));
             if (string.IsNullOrWhiteSpace(overlayJson)) throw new ArgumentException("overlayJson is required.", nameof(overlayJson));
 
-            string dir = Path.Combine(RootCacheDirectoryPath, overlayId);
-            Directory.CreateDirectory(dir);
+            Directory.CreateDirectory(RootCacheDirectoryPath);
 
-            string path = Path.Combine(dir, "overlay.json");
+            string path = Path.Combine(RootCacheDirectoryPath, $"{code}.json");
             File.WriteAllText(path, overlayJson, Encoding.UTF8);
         }
 
-        public string TryLoadOverlayJson(string overlayId)
+        public string TryLoadOverlayJson(string code)
         {
-            if (string.IsNullOrWhiteSpace(overlayId)) return null;
+            if (string.IsNullOrWhiteSpace(code)) return null;
 
-            string path = Path.Combine(RootCacheDirectoryPath, overlayId, "overlay.json");
+            string path = Path.Combine(RootCacheDirectoryPath, $"{code}.json");
             if (!File.Exists(path)) return null;
 
             try {

@@ -170,7 +170,7 @@ public class RemoteControlForm : Form
             try {
                 if (!string.IsNullOrWhiteSpace(resp.Data.OverlayJson)) {
                     // 1. JSON 캐시에 저장
-                    overlayCacheService.SaveOverlayJson(resp.Data.OverlayId, resp.Data.OverlayJson);
+                    overlayCacheService.SaveOverlayJson(resp.Data.Code, resp.Data.OverlayJson);
 
                     // 2. JSON 파싱
                     var parser = new OverlayJsonParser();
@@ -195,10 +195,10 @@ public class RemoteControlForm : Form
     private void LoadedOverlayList_SelectedIndexChanged(object sender, EventArgs e)
     {
         var item = loadedOverlayList.SelectedItem as LoadedOverlayItem;
-        if (item == null || string.IsNullOrWhiteSpace(item.OverlayId)) return;
+        if (item == null || string.IsNullOrWhiteSpace(item.Code)) return;
 
         try {
-            string json = overlayCacheService.TryLoadOverlayJson(item.OverlayId);
+            string json = overlayCacheService.TryLoadOverlayJson(item.Code);
             if (!string.IsNullOrWhiteSpace(json)) {
                 var parser = new OverlayJsonParser();
                 var doc = parser.Parse(json);
@@ -344,36 +344,33 @@ public class RemoteControlForm : Form
             return;
         }
 
-        string[] overlayDirs = Directory.GetDirectories(cacheRoot);
-        foreach (string overlayDir in overlayDirs) {
-            string overlayId = Path.GetFileName(overlayDir);
-            string overlayJsonPath = Path.Combine(overlayDir, "overlay.json");
+        string[] overlayFiles = Directory.GetFiles(cacheRoot, "*.json");
+        foreach (string filePath in overlayFiles) {
+            string fileNameCode = Path.GetFileNameWithoutExtension(filePath);
 
-            string code = overlayId;
+            string code = fileNameCode;
             string title = "(캐시 오버레이)";
 
-            if (File.Exists(overlayJsonPath)) {
-                try {
-                    string json = File.ReadAllText(overlayJsonPath);
-                    string parsedCode = TryExtractJsonStringValue(json, "code", "overlayCode");
-                    string parsedTitle = TryExtractJsonStringValue(json, "name", "title", "overlayName");
+            try {
+                string json = File.ReadAllText(filePath);
+                string parsedCode = TryExtractJsonStringValue(json, "code", "overlayCode");
+                string parsedTitle = TryExtractJsonStringValue(json, "name", "title", "overlayName");
 
-                    if (!string.IsNullOrWhiteSpace(parsedCode)) {
-                        code = parsedCode.Trim().ToUpperInvariant();
-                    }
+                if (!string.IsNullOrWhiteSpace(parsedCode)) {
+                    code = parsedCode.Trim().ToUpperInvariant();
+                }
 
-                    if (!string.IsNullOrWhiteSpace(parsedTitle)) {
-                        title = parsedTitle.Trim();
-                    }
+                if (!string.IsNullOrWhiteSpace(parsedTitle)) {
+                    title = parsedTitle.Trim();
                 }
-                catch {
-                }
+            }
+            catch {
             }
 
             AddLoadedOverlayListItemIfMissing(new LoadedOverlayItem {
                 Code = code,
                 Title = title,
-                OverlayId = overlayId
+                OverlayId = code
             });
         }
     }
