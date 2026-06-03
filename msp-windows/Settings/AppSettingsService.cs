@@ -101,6 +101,16 @@ namespace msp_windows.Settings
             Save(Current);
         }
 
+        public void UpdateAccessToken(string accessToken)
+        {
+            if (Current == null) {
+                LoadOrCreate();
+            }
+
+            Current.AccessToken = accessToken;
+            Save(Current);
+        }
+
         private void BackupCorruptedSettingsFile()
         {
             try {
