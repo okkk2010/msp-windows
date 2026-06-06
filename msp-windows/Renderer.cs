@@ -33,8 +33,13 @@ public static class Renderer
 
         g.SmoothingMode = SmoothingMode.AntiAlias;
 
+        if (document.Canvas.BaseWidth <= 0 || document.Canvas.BaseHeight <= 0 || bounds.Width <= 0 || bounds.Height <= 0) {
+            return;
+        }
+
         double scaleX = bounds.Width / document.Canvas.BaseWidth;
         double scaleY = bounds.Height / document.Canvas.BaseHeight;
+        var transform = RenderTransform.Contain(bounds, document.Canvas.BaseWidth, document.Canvas.BaseHeight);
 
         double globalOpacity = Clamp01(document.OverlaySettings?.Opacity ?? 1.0);
 
@@ -50,10 +55,10 @@ public static class Renderer
 
             switch (el) {
                 case RectElement rect:
-                    DrawRect(g, rect, scaleX, scaleY, finalOpacity);
+                    DrawRect(g, rect, transform, finalOpacity);
                     break;
                 case CircleElement circle:
-                    DrawCircle(g, circle, scaleX, scaleY, finalOpacity);
+                    DrawCircle(g, circle, transform, finalOpacity);
                     break;
                 case LineElement line:
                     DrawLine(g, line, scaleX, scaleY, finalOpacity);
@@ -62,14 +67,14 @@ public static class Renderer
         }
     }
 
-    private static void DrawRect(Graphics g, RectElement rect, double scaleX, double scaleY, double opacity)
+    private static void DrawRect(Graphics g, RectElement rect, RenderTransform transform, double opacity)
     {
         var r = new RectangleF(
-            (float)(rect.X * scaleX),
-            (float)(rect.Y * scaleY),
-            (float)(rect.Width * scaleX),
-            (float)(rect.Height * scaleY));
-        float scaledCornerRadius = (float)(rect.CornerRadius * ((scaleX + scaleY) / 2.0));
+            transform.X(rect.X, rect.Width, rect.Anchor, rect.AnchorSpace),
+            transform.Y(rect.Y, rect.Height, rect.Anchor, rect.AnchorSpace),
+            transform.Size(rect.Width),
+            transform.Size(rect.Height));
+        float scaledCornerRadius = transform.Size(rect.CornerRadius);
 
         DrawWithRotation(g, r, rect.Rotation, () =>
         {
@@ -81,7 +86,7 @@ public static class Renderer
                 }
 
                 if (!string.IsNullOrWhiteSpace(rect.StrokeColor) && rect.StrokeWidth > 0) {
-                    using (var p = new Pen(ApplyOpacity(ParseColor(rect.StrokeColor), opacity), (float)(rect.StrokeWidth * ((scaleX + scaleY) / 2.0)))) {
+                    using (var p = new Pen(ApplyOpacity(ParseColor(rect.StrokeColor), opacity), transform.Size(rect.StrokeWidth))) {
                         g.DrawPath(p, path);
                     }
                 }
@@ -89,13 +94,13 @@ public static class Renderer
         });
     }
 
-    private static void DrawCircle(Graphics g, CircleElement circle, double scaleX, double scaleY, double opacity)
+    private static void DrawCircle(Graphics g, CircleElement circle, RenderTransform transform, double opacity)
     {
         var r = new RectangleF(
-            (float)(circle.X * scaleX),
-            (float)(circle.Y * scaleY),
-            (float)(circle.Width * scaleX),
-            (float)(circle.Height * scaleY));
+            transform.X(circle.X, circle.Width, circle.Anchor, circle.AnchorSpace),
+            transform.Y(circle.Y, circle.Height, circle.Anchor, circle.AnchorSpace),
+            transform.Size(circle.Width),
+            transform.Size(circle.Height));
 
         DrawWithRotation(g, r, circle.Rotation, () =>
         {
@@ -106,7 +111,7 @@ public static class Renderer
             }
 
             if (!string.IsNullOrWhiteSpace(circle.StrokeColor) && circle.StrokeWidth > 0) {
-                using (var p = new Pen(ApplyOpacity(ParseColor(circle.StrokeColor), opacity), (float)(circle.StrokeWidth * ((scaleX + scaleY) / 2.0)))) {
+                using (var p = new Pen(ApplyOpacity(ParseColor(circle.StrokeColor), opacity), transform.Size(circle.StrokeWidth))) {
                     g.DrawEllipse(p, r);
                 }
             }
@@ -301,5 +306,100 @@ public static class Renderer
         path.AddArc(arc, 90, 90);
         path.CloseFigure();
         return path;
+    }
+
+    private struct RenderTransform
+    {
+        private readonly double scale;
+        private readonly Rectangle bounds;
+        private readonly double baseWidth;
+        private readonly double baseHeight;
+        private readonly double safeLeft;
+        private readonly double safeTop;
+        private readonly double safeRight;
+        private readonly double safeBottom;
+
+        private RenderTransform(double scale, Rectangle bounds, double baseWidth, double baseHeight, double safeLeft, double safeTop)
+        {
+            this.scale = scale;
+            this.bounds = bounds;
+            this.baseWidth = baseWidth;
+            this.baseHeight = baseHeight;
+            this.safeLeft = safeLeft;
+            this.safeTop = safeTop;
+            this.safeRight = safeLeft + baseWidth * scale;
+            this.safeBottom = safeTop + baseHeight * scale;
+        }
+
+        public static RenderTransform Contain(Rectangle bounds, double baseWidth, double baseHeight)
+        {
+            double scale = System.Math.Min(bounds.Width / baseWidth, bounds.Height / baseHeight);
+            double scaledWidth = baseWidth * scale;
+            double scaledHeight = baseHeight * scale;
+            double safeLeft = bounds.Left + (bounds.Width - scaledWidth) / 2.0;
+            double safeTop = bounds.Top + (bounds.Height - scaledHeight) / 2.0;
+            return new RenderTransform(scale, bounds, baseWidth, baseHeight, safeLeft, safeTop);
+        }
+
+        public float X(double value, double width, string anchor, string anchorSpace)
+        {
+            double frameLeft = IsScreenSpace(anchorSpace) ? bounds.Left : safeLeft;
+            double frameRight = IsScreenSpace(anchorSpace) ? bounds.Right : safeRight;
+            double frameCenter = (frameLeft + frameRight) / 2.0;
+            double renderWidth = width * scale;
+            double marginRight = baseWidth - value - width;
+            double centerOffset = (value + width / 2.0) - baseWidth / 2.0;
+
+            switch (NormalizeAnchor(anchor)) {
+                case "top-right":
+                case "right":
+                case "bottom-right":
+                    return (float)(frameRight - marginRight * scale - renderWidth);
+                case "top":
+                case "center":
+                case "bottom":
+                    return (float)(frameCenter + centerOffset * scale - renderWidth / 2.0);
+                default:
+                    return (float)(frameLeft + value * scale);
+            }
+        }
+
+        public float Y(double value, double height, string anchor, string anchorSpace)
+        {
+            double frameTop = IsScreenSpace(anchorSpace) ? bounds.Top : safeTop;
+            double frameBottom = IsScreenSpace(anchorSpace) ? bounds.Bottom : safeBottom;
+            double frameCenter = (frameTop + frameBottom) / 2.0;
+            double renderHeight = height * scale;
+            double marginBottom = baseHeight - value - height;
+            double centerOffset = (value + height / 2.0) - baseHeight / 2.0;
+
+            switch (NormalizeAnchor(anchor)) {
+                case "bottom-left":
+                case "bottom":
+                case "bottom-right":
+                    return (float)(frameBottom - marginBottom * scale - renderHeight);
+                case "left":
+                case "center":
+                case "right":
+                    return (float)(frameCenter + centerOffset * scale - renderHeight / 2.0);
+                default:
+                    return (float)(frameTop + value * scale);
+            }
+        }
+
+        public float Size(double value)
+        {
+            return (float)(value * scale);
+        }
+
+        private static string NormalizeAnchor(string anchor)
+        {
+            return string.IsNullOrWhiteSpace(anchor) ? "top-left" : anchor.Trim().ToLowerInvariant();
+        }
+
+        private static bool IsScreenSpace(string anchorSpace)
+        {
+            return string.Equals(anchorSpace, "screen", System.StringComparison.OrdinalIgnoreCase);
+        }
     }
 }

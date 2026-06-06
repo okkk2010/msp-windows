@@ -1,5 +1,7 @@
 # Worklogs
 
+- 2026-06-06: [anchor-space-rect-circle-rendering](./2026-06-06_anchor-space-rect-circle-rendering.md)
+- 2026-06-06: [uniform-scale-rect-circle-rendering](./2026-06-06_uniform-scale-rect-circle-rendering.md)
 - 2026-06-01: [msp-windows-canonical-project](./2026-06-01_msp-windows-canonical-project.md)
 - 2026-06-01: [msp-windows-project-cleanup](./2026-06-01_msp-windows-project-cleanup.md)
 - 2026-06-01: [fix-code-load-json-parse-and-cache](./2026-06-01_fix-code-load-json-parse-and-cache.md)

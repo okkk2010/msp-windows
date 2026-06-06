@@ -149,6 +149,8 @@ namespace msp_windows.Overlay
                 Y = GetDouble(el, "y"),
                 Width = GetDouble(el, "width"),
                 Height = GetDouble(el, "height"),
+                Anchor = GetStringOrDefault(el, "anchor", "top-left"),
+                AnchorSpace = GetStringOrDefault(el, "anchorSpace", "safeFrame"),
                 Rotation = GetDoubleOrDefault(el, "rotation", 0),
                 Opacity = GetDoubleOrDefault(el, "opacity", 1.0),
                 ZIndex = GetIntOrDefault(el, "zIndex", 0),
@@ -171,6 +173,8 @@ namespace msp_windows.Overlay
                 Y = GetDouble(el, "y"),
                 Width = GetDouble(el, "width"),
                 Height = GetDouble(el, "height"),
+                Anchor = GetStringOrDefault(el, "anchor", "top-left"),
+                AnchorSpace = GetStringOrDefault(el, "anchorSpace", "safeFrame"),
                 Rotation = GetDoubleOrDefault(el, "rotation", 0),
                 Opacity = GetDoubleOrDefault(el, "opacity", 1.0),
                 ZIndex = GetIntOrDefault(el, "zIndex", 0),
@@ -272,6 +276,12 @@ namespace msp_windows.Overlay
             if (dict == null) return null;
             if (!dict.TryGetValue(key, out var v)) return null;
             return NormalizeStringValue(v);
+        }
+
+        private static string GetStringOrDefault(Dictionary<string, object> dict, string key, string defaultValue)
+        {
+            string value = GetStringOrNull(dict, key);
+            return string.IsNullOrWhiteSpace(value) ? defaultValue : value;
         }
 
         private static string NormalizeStringValue(object value)
