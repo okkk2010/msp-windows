@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -12,6 +13,7 @@ using System.Windows.Forms;
 using msp_windows.Api;
 using msp_windows.Api.Dtos;
 using msp_windows.Overlay;
+using msp_windows.Overlay.Models;
 using msp_windows.Settings;
 
 public class ProcessItem
@@ -42,11 +44,14 @@ public class RemoteControlForm : Form
 
     private const int LoginCallbackPort = 51321;
     private const int RailWidth = 88;
+    private const string SearchPlaceholder = "Search overlays";
     private static readonly Regex OverlayCodeRegex = new Regex("^[A-Z0-9]{6}$", RegexOptions.Compiled);
 
     private readonly AppSettingsService appSettingsService = new AppSettingsService();
     private readonly OverlayCacheService overlayCacheService = new OverlayCacheService();
     private readonly List<OverlaySelectionItem> overlayItems = new List<OverlaySelectionItem>();
+    private readonly Dictionary<string, OverlayDocument> overlayDocumentCache = new Dictionary<string, OverlayDocument>(StringComparer.OrdinalIgnoreCase);
+    private OverlayDocument activeOverlayDocument;
 
     private TextBox overlayCodeTextBox;
     private Button loadByCodeButton;
@@ -65,6 +70,10 @@ public class RemoteControlForm : Form
     private Label overlayStateLabel;
     private FlowLayoutPanel libraryListPanel;
     private FlowLayoutPanel fullLibraryListPanel;
+    private TextBox librarySearchBox;
+    private TextBox fullLibrarySearchBox;
+    private ComboBox categoryFilter;
+    private ComboBox platformFilter;
     private Panel activePreviewCanvas;
     private Panel homePage;
     private Panel libraryPage;
@@ -287,7 +296,7 @@ public class RemoteControlForm : Form
         libraryCard.Height = Math.Max(420, content.ClientSize.Height - 140);
         libraryCard.Controls.Add(CreateLabel("My Library", 24, 22, 180, 26, 13f, FontStyle.Bold, TextPrimary));
 
-        var searchBox = new TextBox {
+        fullLibrarySearchBox = new TextBox {
             Left = 24,
             Top = 64,
             Width = 260,
@@ -295,17 +304,20 @@ public class RemoteControlForm : Form
             BorderStyle = BorderStyle.FixedSingle,
             Font = new Font("Segoe UI", 9f, FontStyle.Regular)
         };
-        searchBox.PlaceholderTextCompat("Search overlays");
-        libraryCard.Controls.Add(searchBox);
+        fullLibrarySearchBox.PlaceholderTextCompat(SearchPlaceholder);
+        fullLibrarySearchBox.TextChanged += (s, e) => PopulateOverlayList(fullLibraryListPanel);
+        libraryCard.Controls.Add(fullLibrarySearchBox);
 
-        var categoryFilter = CreateComboBox(304, 64, 170);
-        categoryFilter.Items.AddRange(new object[] { "All categories", "Favorites", "Recent", "Local" });
+        categoryFilter = CreateComboBox(304, 64, 170);
+        categoryFilter.Items.AddRange(new object[] { "All categories", "Local", "Cloud" });
         categoryFilter.SelectedIndex = 0;
+        categoryFilter.SelectedIndexChanged += (s, e) => PopulateOverlayList(fullLibraryListPanel);
         libraryCard.Controls.Add(categoryFilter);
 
-        var platformFilter = CreateComboBox(492, 64, 150);
+        platformFilter = CreateComboBox(492, 64, 150);
         platformFilter.Items.AddRange(new object[] { "All platforms", "Windows" });
         platformFilter.SelectedIndex = 0;
+        platformFilter.SelectedIndexChanged += (s, e) => PopulateOverlayList(fullLibraryListPanel);
         libraryCard.Controls.Add(platformFilter);
 
         fullLibraryListPanel = new FlowLayoutPanel {
@@ -477,8 +489,14 @@ public class RemoteControlForm : Form
     private Control CreateActiveOverlayCard()
     {
         var card = CreateCard();
-        card.Controls.Add(CreateLabel("Active overlay", 24, 20, 160, 24, 12f, FontStyle.Bold, TextPrimary));
-        card.Controls.Add(CreateStatusPill("WINDOWS", 166, 22, 78, ChipBackground, PrimaryColor));
+
+        int titleWidth;
+        using (var titleFont = new Font("Segoe UI", 12f, FontStyle.Bold)) {
+            titleWidth = TextRenderer.MeasureText("Active overlay", titleFont).Width;
+        }
+        var titleLabel = CreateLabel("Active overlay", 24, 20, titleWidth + 4, 24, 12f, FontStyle.Bold, TextPrimary);
+        card.Controls.Add(titleLabel);
+        card.Controls.Add(CreateStatusPill("WINDOWS", titleLabel.Right + 8, 22, 78, ChipBackground, PrimaryColor));
 
         activeOverlayNameLabel = CreateLabel("No overlay selected", 24, 56, 300, 22, 10.5f, FontStyle.Bold, TextPrimary);
         activeOverlayMetaLabel = CreateLabel("Load by code or select from My Library.", 24, 80, 360, 18, 8.5f, FontStyle.Regular, TextMuted);
@@ -487,7 +505,7 @@ public class RemoteControlForm : Form
 
         var changeButton = CreateButton("Choose", 486, 22, 86, 36, Color.White, TextPrimary);
         changeButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-        changeButton.Click += (s, e) => libraryListPanel?.Focus();
+        changeButton.Click += (s, e) => ShowSection(AppSection.Library);
         card.Controls.Add(changeButton);
         card.Resize += (s, e) => changeButton.Left = card.Width - 110;
 
@@ -504,32 +522,6 @@ public class RemoteControlForm : Form
         activePreviewCanvas.Paint += DrawActivePreview;
         card.Controls.Add(activePreviewCanvas);
 
-        var loadStrip = new RoundedPanel {
-            Left = 24,
-            Top = 414,
-            Width = 540,
-            Height = 58,
-            Radius = 8,
-            BackColor = MutedBackground,
-            BorderColor = BorderColor,
-            Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom
-        };
-        loadStrip.Controls.Add(CreateLabel("Need a different overlay?", 16, 10, 180, 18, 8.5f, FontStyle.Bold, TextPrimary));
-        loadStrip.Controls.Add(CreateLabel("Use code load or select from My Library.", 16, 30, 240, 16, 7.5f, FontStyle.Regular, TextMuted));
-        var codeButton = CreateButton("Load Code", 314, 12, 82, 34, Color.White, TextPrimary);
-        var libraryButton = CreateButton("My Library", 406, 12, 94, 34, PrimaryColor, Color.White);
-        codeButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-        libraryButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-        codeButton.Click += (s, e) => overlayCodeTextBox?.Focus();
-        libraryButton.Click += (s, e) => libraryListPanel?.Focus();
-        loadStrip.Controls.Add(codeButton);
-        loadStrip.Controls.Add(libraryButton);
-        loadStrip.Resize += (s, e) => {
-            libraryButton.Left = loadStrip.Width - 110;
-            codeButton.Left = libraryButton.Left - 92;
-        };
-        card.Controls.Add(loadStrip);
-
         card.Resize += (s, e) => ResizeActiveOverlayCard(card);
         return card;
     }
@@ -538,17 +530,7 @@ public class RemoteControlForm : Form
     {
         if (activePreviewCanvas != null) {
             activePreviewCanvas.Width = Math.Max(320, card.Width - 48);
-            activePreviewCanvas.Height = Math.Max(220, card.Height - 250);
-        }
-
-        foreach (Control child in card.Controls) {
-            if (child is RoundedPanel panel && panel.Controls.Count > 0) {
-                var first = panel.Controls[0] as Label;
-                if (first != null && first.Text == "Need a different overlay?") {
-                    panel.Top = card.Height - 82;
-                    panel.Width = Math.Max(320, card.Width - 48);
-                }
-            }
+            activePreviewCanvas.Height = Math.Max(220, card.Height - 144);
         }
     }
 
@@ -589,7 +571,7 @@ public class RemoteControlForm : Form
         libraryCard.Height = 370;
         libraryCard.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
         libraryCard.Controls.Add(CreateLabel("My Library", 20, 18, 140, 24, 12f, FontStyle.Bold, TextPrimary));
-        var searchBox = new TextBox {
+        librarySearchBox = new TextBox {
             Left = 168,
             Top = 16,
             Width = 188,
@@ -598,8 +580,9 @@ public class RemoteControlForm : Form
             Font = new Font("Segoe UI", 9f, FontStyle.Regular),
             Text = ""
         };
-        searchBox.PlaceholderTextCompat("Search overlays");
-        libraryCard.Controls.Add(searchBox);
+        librarySearchBox.PlaceholderTextCompat(SearchPlaceholder);
+        librarySearchBox.TextChanged += (s, e) => PopulateOverlayList(libraryListPanel);
+        libraryCard.Controls.Add(librarySearchBox);
 
         libraryListPanel = new FlowLayoutPanel {
             Left = 16,
@@ -619,7 +602,7 @@ public class RemoteControlForm : Form
         refreshLibraryButton.Click += RefreshLibraryButton_Click;
         libraryCard.Controls.Add(refreshLibraryButton);
         libraryCard.Resize += (s, e) => {
-            searchBox.Left = libraryCard.Width - 208;
+            librarySearchBox.Left = libraryCard.Width - 208;
             libraryListPanel.Width = libraryCard.Width - 32;
             libraryListPanel.Height = Math.Max(120, libraryCard.Height - 150);
             refreshLibraryButton.Top = libraryCard.Height - 64;
@@ -655,6 +638,7 @@ public class RemoteControlForm : Form
         appSettingsService.UpdateAccessToken(null);
         overlayItems.RemoveAll(item => item.Source == OverlaySource.Library);
         selectedOverlayItem = null;
+        activeOverlayDocument = null;
         RenderOverlayPreviewCards();
         UpdateAuthUi();
         UpdateSelectedOverlayUi("Logged out.");
@@ -868,6 +852,10 @@ public class RemoteControlForm : Form
         var applyService = new OverlayApplyService();
         applyService.Apply(doc);
 
+        if (!string.IsNullOrWhiteSpace(cacheCode)) {
+            overlayDocumentCache[cacheCode] = doc;
+        }
+
         overlay.Code = cacheCode;
         appSettingsService.UpdateLastSelectedOverlayId(GetOverlaySelectionId(overlay, doc.OverlayId));
     }
@@ -1018,16 +1006,67 @@ public class RemoteControlForm : Form
         panel.SuspendLayout();
         panel.Controls.Clear();
 
-        if (overlayItems.Count == 0) {
-            panel.Controls.Add(CreateLibraryRowShell("No overlays yet", "Load a code or refresh library.", null, false));
+        var items = GetFilteredItemsForPanel(panel);
+
+        if (items.Count == 0) {
+            if (overlayItems.Count == 0) {
+                panel.Controls.Add(CreateLibraryRowShell("No overlays yet", "Load a code or refresh library.", null, false));
+            }
+            else {
+                panel.Controls.Add(CreateLibraryRowShell("No matching overlays", "Try a different search or filter.", null, false));
+            }
         }
         else {
-            foreach (var item in overlayItems) {
+            foreach (var item in items) {
                 panel.Controls.Add(CreateLibraryRow(item));
             }
         }
 
         panel.ResumeLayout();
+        ResizeLibraryRows(panel);
+    }
+
+    private List<OverlaySelectionItem> GetFilteredItemsForPanel(FlowLayoutPanel panel)
+    {
+        if (panel == fullLibraryListPanel) {
+            return FilterOverlayItems(
+                fullLibrarySearchBox?.Text,
+                categoryFilter?.SelectedItem as string,
+                platformFilter?.SelectedItem as string);
+        }
+
+        if (panel == libraryListPanel) {
+            return FilterOverlayItems(librarySearchBox?.Text, null, null);
+        }
+
+        return overlayItems.ToList();
+    }
+
+    private List<OverlaySelectionItem> FilterOverlayItems(string search, string category, string platform)
+    {
+        IEnumerable<OverlaySelectionItem> items = overlayItems;
+
+        if (!string.IsNullOrWhiteSpace(search) && !string.Equals(search, SearchPlaceholder, StringComparison.Ordinal)) {
+            string needle = search.Trim().ToLowerInvariant();
+            items = items.Where(i =>
+                (i.DisplayName ?? string.Empty).ToLowerInvariant().Contains(needle) ||
+                (i.Code ?? string.Empty).ToLowerInvariant().Contains(needle) ||
+                (i.GameName ?? string.Empty).ToLowerInvariant().Contains(needle));
+        }
+
+        if (string.Equals(category, "Local", StringComparison.Ordinal)) {
+            items = items.Where(i => i.Source == OverlaySource.LocalCache);
+        }
+        else if (string.Equals(category, "Cloud", StringComparison.Ordinal)) {
+            items = items.Where(i => i.Source == OverlaySource.Library);
+        }
+
+        if (string.Equals(platform, "Windows", StringComparison.Ordinal)) {
+            items = items.Where(i => string.IsNullOrWhiteSpace(i.Platform)
+                || string.Equals(i.Platform.Trim(), "windows", StringComparison.OrdinalIgnoreCase));
+        }
+
+        return items.ToList();
     }
 
     private Control CreateLibraryRow(OverlaySelectionItem item)
@@ -1065,6 +1104,7 @@ public class RemoteControlForm : Form
             BackColor = item != null && item.Source == OverlaySource.Library ? Color.FromArgb(219, 234, 254) : Color.FromArgb(224, 242, 254),
             BorderColor = Color.Transparent
         };
+        preview.Tag = item;
         preview.Paint += DrawMiniPreview;
         row.Controls.Add(preview);
 
@@ -1094,11 +1134,38 @@ public class RemoteControlForm : Form
     private void SelectOverlayItem(OverlaySelectionItem item)
     {
         selectedOverlayItem = item;
+        activeOverlayDocument = TryLoadOverlayDocument(item?.Code);
         UpdateActiveOverlayLabels();
         if (item != null) {
             UpdateSelectedOverlayUi("Selected: " + item.DisplayName);
         }
         activePreviewCanvas?.Invalidate();
+    }
+
+    private OverlayDocument TryLoadOverlayDocument(string code)
+    {
+        if (string.IsNullOrWhiteSpace(code)) {
+            return null;
+        }
+
+        if (overlayDocumentCache.TryGetValue(code, out var cached)) {
+            return cached;
+        }
+
+        string json = overlayCacheService.TryLoadOverlayJson(code);
+        if (string.IsNullOrWhiteSpace(json)) {
+            return null;
+        }
+
+        try {
+            var doc = new OverlayJsonParser().Parse(json);
+            overlayDocumentCache[code] = doc;
+            return doc;
+        }
+        catch (Exception ex) {
+            ErrorLogger.LogError("E230", "Preview parse failed for " + code + ": " + ex.Message);
+            return null;
+        }
     }
 
     private void ApplyCachedOverlay(OverlaySelectionItem item)
@@ -1237,6 +1304,16 @@ public class RemoteControlForm : Form
             }
         }
 
+        if (activeOverlayDocument != null) {
+            Renderer.DrawOverlayDocument(g, bounds, activeOverlayDocument);
+            return;
+        }
+
+        DrawActivePreviewPlaceholder(g, bounds);
+    }
+
+    private void DrawActivePreviewPlaceholder(Graphics g, Rectangle bounds)
+    {
         using (var primary = new SolidBrush(PrimaryColor))
         using (var cyan = new SolidBrush(Color.FromArgb(6, 182, 212)))
         using (var marker = new SolidBrush(Color.FromArgb(217, 70, 239)))
@@ -1253,6 +1330,18 @@ public class RemoteControlForm : Form
     {
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
+
+        var panel = sender as Control;
+        var item = panel?.Tag as OverlaySelectionItem;
+        var doc = item != null ? TryLoadOverlayDocument(item.Code) : null;
+
+        if (doc != null && panel != null) {
+            var bounds = panel.ClientRectangle;
+            bounds.Inflate(-6, -6);
+            Renderer.DrawOverlayDocument(g, bounds, doc);
+            return;
+        }
+
         using (var primary = new SolidBrush(Color.FromArgb(37, 99, 235)))
         using (var cyan = new SolidBrush(Color.FromArgb(6, 182, 212)))
         {
@@ -1456,7 +1545,7 @@ public class RemoteControlForm : Form
                 OverlayId = overlay.OverlayId,
                 Code = overlay.Code,
                 DisplayName = string.IsNullOrWhiteSpace(overlay.Name) ? "(Untitled)" : overlay.Name,
-                GameName = overlay.Game?.Name,
+                GameName = overlay.Game,
                 Platform = overlay.Platform,
                 ThumbnailUrl = BuildAbsoluteUrl(overlay.ThumbnailUrl, serverBaseUrl)
             };

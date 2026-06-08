@@ -169,10 +169,19 @@ namespace msp_windows.Api
 
         private static ApiResponse<T> TryDeserializeCompatibleApiResponse<T>(string json)
         {
-            if (typeof(T) != typeof(OverlayDetailResponse)) {
-                return null;
+            if (typeof(T) == typeof(OverlayDetailResponse)) {
+                return TryDeserializeCompatibleOverlayResponse<T>(json);
             }
 
+            if (typeof(T) == typeof(List<LibraryItemResponse>)) {
+                return TryDeserializeCompatibleLibraryResponse<T>(json);
+            }
+
+            return null;
+        }
+
+        private static ApiResponse<T> TryDeserializeCompatibleOverlayResponse<T>(string json)
+        {
             try {
                 var root = DeserializeToDictionary(json);
                 var response = new ApiResponse<OverlayDetailResponse>
@@ -200,6 +209,67 @@ namespace msp_windows.Api
                 ErrorLogger.LogError("E204", "Compatible response parse failed: " + ex.Message);
                 return null;
             }
+        }
+
+        private static ApiResponse<T> TryDeserializeCompatibleLibraryResponse<T>(string json)
+        {
+            try {
+                var root = DeserializeToDictionary(json);
+                var response = new ApiResponse<List<LibraryItemResponse>>
+                {
+                    Success = GetBoolOrDefault(root, "success", false),
+                    Message = GetStringOrNull(root, "message"),
+                    Data = new List<LibraryItemResponse>()
+                };
+
+                var data = GetValueOrNull(root, "data") as IEnumerable<object>;
+                if (data != null) {
+                    foreach (var entry in data) {
+                        if (!(entry is Dictionary<string, object> itemDict)) {
+                            continue;
+                        }
+
+                        var overlayDict = GetDictOrNull(itemDict, "overlay");
+                        response.Data.Add(new LibraryItemResponse
+                        {
+                            LibraryId = GetLongOrDefault(itemDict, "libraryId", 0),
+                            SavedAt = GetStringOrNull(itemDict, "savedAt"),
+                            Overlay = overlayDict == null ? null : new OverlaySummaryResponse
+                            {
+                                Id = GetLongOrDefault(overlayDict, "id", 0),
+                                OverlayId = GetStringOrNull(overlayDict, "overlayId"),
+                                Code = GetStringOrNull(overlayDict, "code"),
+                                Name = GetStringOrNull(overlayDict, "name"),
+                                Platform = NormalizePlatform(GetValueOrNull(overlayDict, "platform")),
+                                Game = NormalizeGame(GetValueOrNull(overlayDict, "game")),
+                                ThumbnailUrl = GetStringOrNull(overlayDict, "thumbnailPath")
+                                    ?? GetStringOrNull(overlayDict, "thumbnailUrl")
+                            }
+                        });
+                    }
+                }
+
+                return (ApiResponse<T>)(object)response;
+            }
+            catch (Exception ex) {
+                ErrorLogger.LogError("E205", "Compatible library parse failed: " + ex.Message);
+                return null;
+            }
+        }
+
+        private static string NormalizeGame(object value)
+        {
+            if (value == null) {
+                return null;
+            }
+
+            if (value is Dictionary<string, object> dict) {
+                return GetStringOrNull(dict, "name")
+                    ?? GetStringOrNull(dict, "slug")
+                    ?? GetStringOrNull(dict, "id");
+            }
+
+            return value.ToString();
         }
 
         private static Dictionary<string, object> DeserializeToDictionary(string json)

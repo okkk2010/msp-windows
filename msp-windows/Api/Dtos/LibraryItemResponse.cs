@@ -34,19 +34,9 @@ namespace msp_windows.Api.Dtos
         public string Platform { get; set; }
 
         [DataMember(Name = "game", EmitDefaultValue = true)]
-        public GameResponse Game { get; set; }
+        public string Game { get; set; }
 
-        [DataMember(Name = "thumbnailUrl", EmitDefaultValue = true)]
+        [DataMember(Name = "thumbnailPath", EmitDefaultValue = true)]
         public string ThumbnailUrl { get; set; }
-    }
-
-    [DataContract]
-    public class GameResponse
-    {
-        [DataMember(Name = "id", EmitDefaultValue = true)]
-        public long Id { get; set; }
-
-        [DataMember(Name = "name", EmitDefaultValue = true)]
-        public string Name { get; set; }
     }
 }
