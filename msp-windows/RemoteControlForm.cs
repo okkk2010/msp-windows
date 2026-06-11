@@ -51,14 +51,14 @@ public class RemoteControlForm : Form
     private readonly OverlayCacheService overlayCacheService = new OverlayCacheService();
     private readonly List<OverlaySelectionItem> overlayItems = new List<OverlaySelectionItem>();
     private readonly Dictionary<string, OverlayDocument> overlayDocumentCache = new Dictionary<string, OverlayDocument>(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> favoriteKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
     private OverlayDocument activeOverlayDocument;
 
     private TextBox overlayCodeTextBox;
     private Button loadByCodeButton;
     private Label codeLoadStatusLabel;
     private ComboBox processList;
-    private Button startOverlayButton;
-    private Button closeOverlayButton;
+    private RoundedButton overlayToggleButton;
     private Button loginGoogleButton;
     private Button logoutButton;
     private Button refreshLibraryButton;
@@ -67,12 +67,13 @@ public class RemoteControlForm : Form
     private Label activeOverlayNameLabel;
     private Label activeOverlayMetaLabel;
     private Label selectedOverlayStatusLabel;
-    private Label overlayStateLabel;
     private FlowLayoutPanel libraryListPanel;
-    private FlowLayoutPanel fullLibraryListPanel;
+    private FlowLayoutPanel cloudListPanel;
+    private FlowLayoutPanel localListPanel;
+    private Label cloudCountLabel;
+    private Label localCountLabel;
     private TextBox librarySearchBox;
     private TextBox fullLibrarySearchBox;
-    private ComboBox categoryFilter;
     private ComboBox platformFilter;
     private Panel activePreviewCanvas;
     private Panel homePage;
@@ -83,6 +84,7 @@ public class RemoteControlForm : Form
     private Control settingsNavButton;
 
     private string loadedOverlayStorePath;
+    private string favoritesStorePath;
     private string accessToken;
     private UserMeResponse currentUser;
     private OverlaySelectionItem selectedOverlayItem;
@@ -99,12 +101,45 @@ public class RemoteControlForm : Form
 
         appSettingsService.LoadOrCreate();
         loadedOverlayStorePath = Path.Combine(appSettingsService.SettingsDirectoryPath, "loaded-overlays.txt");
+        favoritesStorePath = Path.Combine(appSettingsService.SettingsDirectoryPath, "favorite-overlays.txt");
         accessToken = appSettingsService.Current.AccessToken;
 
+        LoadFavorites();
         BuildLayout();
         LoadRunningProcesses();
         LoadCachedOverlayCards();
         _ = RestoreLoginAsync();
+    }
+
+    protected override void OnShown(EventArgs e)
+    {
+        base.OnShown(e);
+        ReapplyResponsiveLayout();
+    }
+
+    // The responsive Resize handlers initially run with the form's design-time
+    // size, before the window is shown and DPI auto-scaling is applied. Once the
+    // form is visible we know the real client size, so trigger one more layout
+    // pass to fix the initial alignment (previously only a manual resize did this).
+    private void ReapplyResponsiveLayout()
+    {
+        if (!IsHandleCreated) {
+            return;
+        }
+
+        var client = ClientSize;
+        if (client.Width <= 0 || client.Height <= 0) {
+            return;
+        }
+
+        SuspendLayout();
+        try {
+            ClientSize = new Size(client.Width, client.Height + 1);
+            ClientSize = client;
+        }
+        finally {
+            ResumeLayout(true);
+        }
     }
 
     private void BuildLayout()
@@ -160,37 +195,68 @@ public class RemoteControlForm : Form
         header.Height = 58;
         content.Controls.Add(header);
 
-        var gameStatus = CreateGameStatusCard();
-        gameStatus.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
-        gameStatus.Left = 32;
-        gameStatus.Top = 108;
-        gameStatus.Width = Math.Max(0, content.ClientSize.Width - 64);
-        gameStatus.Height = 90;
-        content.Controls.Add(gameStatus);
+        const int bottomBarHeight = 96;
+        const int runCardWidth = 376; // matches the My Library column width above it
+        const int columnGap = 24;
+        const int bottomMargin = 24;
+        const int gap = 16;
+        const int contentTop = 108;
+        int bottomTop = Math.Max(contentTop + 200, content.ClientSize.Height - bottomMargin - bottomBarHeight);
 
         var activeOverlay = CreateActiveOverlayCard();
         activeOverlay.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
         activeOverlay.Left = 32;
-        activeOverlay.Top = 222;
+        activeOverlay.Top = contentTop;
         activeOverlay.Width = Math.Max(560, content.ClientSize.Width - 472);
-        activeOverlay.Height = Math.Max(430, content.ClientSize.Height - 254);
+        activeOverlay.Height = Math.Max(200, bottomTop - gap - contentTop);
         content.Controls.Add(activeOverlay);
 
         var rightColumn = CreateRightColumn();
         rightColumn.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Right;
         rightColumn.Left = content.ClientSize.Width - 408;
-        rightColumn.Top = 222;
+        rightColumn.Top = contentTop;
         rightColumn.Width = 376;
-        rightColumn.Height = Math.Max(430, content.ClientSize.Height - 254);
+        rightColumn.Height = Math.Max(200, bottomTop - gap - contentTop);
         content.Controls.Add(rightColumn);
 
+        // Program selection and the overlay run button live in a separate bar at
+        // the bottom of the screen, split into two independent cards.
+        var selectionCard = CreateGameSelectionCard();
+        selectionCard.Anchor = AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
+        selectionCard.Left = 32;
+        selectionCard.Top = bottomTop;
+        selectionCard.Width = Math.Max(300, content.ClientSize.Width - 64 - runCardWidth - columnGap);
+        selectionCard.Height = bottomBarHeight;
+        content.Controls.Add(selectionCard);
+
+        var runCard = CreateOverlayRunCard();
+        runCard.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
+        runCard.Left = content.ClientSize.Width - 32 - runCardWidth;
+        runCard.Top = bottomTop;
+        runCard.Width = runCardWidth;
+        runCard.Height = bottomBarHeight;
+        content.Controls.Add(runCard);
+
         content.Resize += (s, e) => {
+            int barTop = Math.Max(contentTop + 200, content.ClientSize.Height - bottomMargin - bottomBarHeight);
             header.Width = Math.Max(0, content.ClientSize.Width - 64);
-            gameStatus.Width = Math.Max(0, content.ClientSize.Width - 64);
+
             rightColumn.Left = content.ClientSize.Width - rightColumn.Width - 32;
-            rightColumn.Height = Math.Max(430, content.ClientSize.Height - rightColumn.Top - 32);
-            activeOverlay.Width = Math.Max(560, rightColumn.Left - activeOverlay.Left - 24);
-            activeOverlay.Height = Math.Max(430, content.ClientSize.Height - activeOverlay.Top - 32);
+            rightColumn.Top = contentTop;
+            rightColumn.Height = Math.Max(200, barTop - gap - contentTop);
+
+            activeOverlay.Top = contentTop;
+            activeOverlay.Width = Math.Max(420, rightColumn.Left - activeOverlay.Left - 24);
+            activeOverlay.Height = Math.Max(200, barTop - gap - contentTop);
+
+            selectionCard.Top = barTop;
+            selectionCard.Width = Math.Max(300, content.ClientSize.Width - 64 - runCardWidth - columnGap);
+            selectionCard.Height = bottomBarHeight;
+
+            runCard.Top = barTop;
+            runCard.Left = content.ClientSize.Width - 32 - runCardWidth;
+            runCard.Height = bottomBarHeight;
+
             ResizeActiveOverlayCard(activeOverlay);
             ResizeRightColumn(rightColumn);
         };
@@ -288,68 +354,146 @@ public class RemoteControlForm : Form
         header.Height = 58;
         content.Controls.Add(header);
 
+        var codeCard = CreateCard();
+        codeCard.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+        codeCard.Left = 32;
+        codeCard.Top = 102;
+        codeCard.Width = Math.Max(0, content.ClientSize.Width - 64);
+        codeCard.Height = 116;
+        codeCard.Controls.Add(CreateLabel("Load by code", 24, 18, 200, 24, 12f, FontStyle.Bold, TextPrimary));
+        codeCard.Controls.Add(CreateLabel("Paste a 6-character shared overlay code.", 24, 44, 320, 18, 8f, FontStyle.Regular, TextMuted));
+
+        var codeHost = CreateRoundedTextBox(out overlayCodeTextBox, 24, 72, 214, 36, 8, 10f);
+        overlayCodeTextBox.CharacterCasing = CharacterCasing.Upper;
+        overlayCodeTextBox.MaxLength = 6;
+        loadByCodeButton = CreateButton("Load", 250, 70, 110, 38, PrimaryColor, Color.White);
+        loadByCodeButton.Click += LoadByCodeButton_Click;
+        codeLoadStatusLabel = CreateLabel("Invalid codes show a short status message here.", 376, 80, 360, 18, 8f, FontStyle.Regular, TextMuted);
+        codeCard.Controls.Add(codeHost);
+        codeCard.Controls.Add(loadByCodeButton);
+        codeCard.Controls.Add(codeLoadStatusLabel);
+        content.Controls.Add(codeCard);
+
         var libraryCard = CreateCard();
         libraryCard.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
         libraryCard.Left = 32;
-        libraryCard.Top = 108;
+        libraryCard.Top = 238;
         libraryCard.Width = Math.Max(0, content.ClientSize.Width - 64);
-        libraryCard.Height = Math.Max(420, content.ClientSize.Height - 140);
+        libraryCard.Height = Math.Max(320, content.ClientSize.Height - 270);
         libraryCard.Controls.Add(CreateLabel("My Library", 24, 22, 180, 26, 13f, FontStyle.Bold, TextPrimary));
 
-        fullLibrarySearchBox = new TextBox {
-            Left = 24,
-            Top = 64,
-            Width = 260,
-            Height = 34,
-            BorderStyle = BorderStyle.FixedSingle,
-            Font = new Font("Segoe UI", 9f, FontStyle.Regular)
-        };
+        var fullSearchHost = CreateRoundedTextBox(out fullLibrarySearchBox, 24, 64, 260, 36, 8, 9f);
         fullLibrarySearchBox.PlaceholderTextCompat(SearchPlaceholder);
-        fullLibrarySearchBox.TextChanged += (s, e) => PopulateOverlayList(fullLibraryListPanel);
-        libraryCard.Controls.Add(fullLibrarySearchBox);
+        fullLibrarySearchBox.TextChanged += (s, e) => RefreshLibraryColumns();
+        libraryCard.Controls.Add(fullSearchHost);
 
-        categoryFilter = CreateComboBox(304, 64, 170);
-        categoryFilter.Items.AddRange(new object[] { "All categories", "Local", "Cloud" });
-        categoryFilter.SelectedIndex = 0;
-        categoryFilter.SelectedIndexChanged += (s, e) => PopulateOverlayList(fullLibraryListPanel);
-        libraryCard.Controls.Add(categoryFilter);
-
-        platformFilter = CreateComboBox(492, 64, 150);
+        platformFilter = CreateComboBox(304, 64, 170);
         platformFilter.Items.AddRange(new object[] { "All platforms", "Windows" });
         platformFilter.SelectedIndex = 0;
-        platformFilter.SelectedIndexChanged += (s, e) => PopulateOverlayList(fullLibraryListPanel);
+        platformFilter.SelectedIndexChanged += (s, e) => RefreshLibraryColumns();
         libraryCard.Controls.Add(platformFilter);
 
-        fullLibraryListPanel = new FlowLayoutPanel {
-            Left = 24,
-            Top = 116,
-            Width = libraryCard.Width - 48,
-            Height = libraryCard.Height - 184,
-            Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right,
-            FlowDirection = FlowDirection.TopDown,
-            WrapContents = false,
-            AutoScroll = true,
-            BackColor = CardBackground
-        };
-        libraryCard.Controls.Add(fullLibraryListPanel);
+        // CLOUD (left) and LOCAL (right) are shown as two separate columns.
+        var cloudHeader = BuildColumnHeader("Cloud", "Saved to your account", out cloudCountLabel);
+        libraryCard.Controls.Add(cloudHeader);
+        cloudListPanel = CreateColumnListPanel();
+        libraryCard.Controls.Add(cloudListPanel);
+
+        var localHeader = BuildColumnHeader("Local", "Downloaded to this PC", out localCountLabel);
+        libraryCard.Controls.Add(localHeader);
+        localListPanel = CreateColumnListPanel();
+        libraryCard.Controls.Add(localListPanel);
 
         var refreshButton = CreateButton("Refresh Library", 24, libraryCard.Height - 52, 180, 36, Color.White, TextPrimary);
         refreshButton.Anchor = AnchorStyles.Left | AnchorStyles.Bottom;
         refreshButton.Click += RefreshLibraryButton_Click;
         libraryCard.Controls.Add(refreshButton);
 
+        LayoutLibraryColumns(libraryCard, cloudHeader, localHeader);
         libraryCard.Resize += (s, e) => {
-            fullLibraryListPanel.Width = libraryCard.Width - 48;
-            fullLibraryListPanel.Height = Math.Max(160, libraryCard.Height - 184);
+            LayoutLibraryColumns(libraryCard, cloudHeader, localHeader);
             ResizeLibraryRows();
         };
 
         content.Controls.Add(libraryCard);
         content.Resize += (s, e) => {
             header.Width = Math.Max(0, content.ClientSize.Width - 64);
+            codeCard.Width = Math.Max(0, content.ClientSize.Width - 64);
             libraryCard.Width = Math.Max(0, content.ClientSize.Width - 64);
-            libraryCard.Height = Math.Max(420, content.ClientSize.Height - 140);
+            libraryCard.Height = Math.Max(320, content.ClientSize.Height - 270);
         };
+    }
+
+    private FlowLayoutPanel CreateColumnListPanel()
+    {
+        return new FlowLayoutPanel {
+            FlowDirection = FlowDirection.TopDown,
+            WrapContents = false,
+            AutoScroll = true,
+            BackColor = CardBackground
+        };
+    }
+
+    private RoundedPanel BuildColumnHeader(string title, string subtitle, out Label countLabel)
+    {
+        var bar = new RoundedPanel {
+            Height = 40,
+            Radius = 8,
+            BackColor = MutedBackground,
+            BorderColor = BorderColor
+        };
+
+        var titleLabel = CreateLabel(title.ToUpperInvariant(), 14, 11, 70, 18, 9.5f, FontStyle.Bold, TextPrimary);
+        bar.Controls.Add(titleLabel);
+
+        var pill = new PillLabel {
+            Text = "0",
+            Left = titleLabel.Right + 4,
+            Top = 11,
+            Width = 30,
+            Height = 18,
+            Font = new Font("Segoe UI", 7.5f, FontStyle.Bold),
+            ForeColor = TextSecondary,
+            BackColor = CardBackground,
+            Radius = 9,
+            TextAlign = ContentAlignment.MiddleCenter
+        };
+        bar.Controls.Add(pill);
+        bar.Controls.Add(CreateLabel(subtitle, pill.Right + 10, 12, 220, 16, 8f, FontStyle.Regular, TextMuted));
+
+        countLabel = pill;
+        return bar;
+    }
+
+    private void LayoutLibraryColumns(Control card, Control cloudHeader, Control localHeader)
+    {
+        if (cloudListPanel == null || localListPanel == null || cloudHeader == null || localHeader == null) {
+            return;
+        }
+
+        const int pad = 24;
+        const int gap = 20;
+        const int topY = 112;
+        const int headerH = 40;
+        const int listTop = 162;
+        const int bottomReserve = 64;
+
+        int colW = Math.Max(220, (card.Width - pad * 2 - gap) / 2);
+        int leftX = pad;
+        int rightX = pad + colW + gap;
+        int listH = Math.Max(120, card.Height - listTop - bottomReserve);
+
+        cloudHeader.SetBounds(leftX, topY, colW, headerH);
+        cloudListPanel.SetBounds(leftX, listTop, colW, listH);
+        localHeader.SetBounds(rightX, topY, colW, headerH);
+        localListPanel.SetBounds(rightX, listTop, colW, listH);
+    }
+
+    private void RefreshLibraryColumns()
+    {
+        PopulateOverlayList(cloudListPanel);
+        PopulateOverlayList(localListPanel);
+        ResizeLibraryRows();
     }
 
     private void BuildSettingsPage(Panel content)
@@ -418,17 +562,10 @@ public class RemoteControlForm : Form
         };
         hotkeyCard.Controls.Add(enabledCheck);
 
-        var hotkeyBox = new TextBox {
-            Left = 24,
-            Top = 126,
-            Width = 180,
-            Height = 34,
-            Text = "Alt + Shift + S",
-            ReadOnly = true,
-            BorderStyle = BorderStyle.FixedSingle,
-            Font = new Font("Segoe UI", 9f, FontStyle.Regular)
-        };
-        hotkeyCard.Controls.Add(hotkeyBox);
+        var hotkeyHost = CreateRoundedTextBox(out var hotkeyBox, 24, 126, 180, 36, 8, 9f);
+        hotkeyBox.Text = "Alt + Shift + S";
+        hotkeyBox.ReadOnly = true;
+        hotkeyCard.Controls.Add(hotkeyHost);
         hotkeyCard.Controls.Add(CreateLabel("Custom key assignment is a UI placeholder until HotkeyManager supports configurable keys.", 224, 126, 260, 40, 8f, FontStyle.Regular, TextMuted));
 
         content.Controls.Add(accountCard);
@@ -438,19 +575,21 @@ public class RemoteControlForm : Form
 
     private Control CreateHeader(string title, string subtitle)
     {
+        // Indent the title/subtitle by the card inner padding (24) so the header text
+        // lines up vertically with the text inside the cards below it.
         var header = new Panel { BackColor = AppBackground };
-        header.Controls.Add(CreateLabel(title, 0, 4, 260, 30, 18f, FontStyle.Bold, TextPrimary));
-        header.Controls.Add(CreateLabel(subtitle, 1, 34, 620, 20, 9f, FontStyle.Regular, TextMuted));
+        header.Controls.Add(CreateLabel(title, 24, 4, 260, 30, 18f, FontStyle.Bold, TextPrimary));
+        header.Controls.Add(CreateLabel(subtitle, 24, 34, 620, 20, 9f, FontStyle.Regular, TextMuted));
         return header;
     }
 
-    private Control CreateGameStatusCard()
+    private Control CreateGameSelectionCard()
     {
         var card = CreateCard();
 
         var gameIcon = new RoundedPanel {
             Left = 16,
-            Top = 16,
+            Top = 18,
             Width = 58,
             Height = 58,
             Radius = 10,
@@ -461,27 +600,28 @@ public class RemoteControlForm : Form
         gameIcon.Controls.Add(CreateAccentBar(14, 30, 22, 4, PrimaryColor));
         card.Controls.Add(gameIcon);
 
-        card.Controls.Add(CreateLabel("DETECTED GAME", 92, 18, 160, 15, 7.5f, FontStyle.Bold, TextMuted));
-        processList = CreateComboBox(92, 38, 250);
+        card.Controls.Add(CreateLabel("DETECTED GAME", 92, 20, 160, 15, 7.5f, FontStyle.Bold, TextMuted));
+        processList = CreateComboBox(92, 40, 250);
         processList.DropDown += (s, e) => LoadRunningProcesses();
         card.Controls.Add(processList);
+        card.Resize += (s, e) => processList.Width = Math.Max(180, card.Width - 92 - 24);
 
-        overlayStateLabel = CreateStatusPill("Overlay loaded", 360, 32, 110, SuccessBackground, SuccessText);
-        card.Controls.Add(overlayStateLabel);
-        card.Controls.Add(CreateStatusPill("Windows only", 480, 32, 106, ChipBackground, PrimaryColor));
+        return card;
+    }
 
-        closeOverlayButton = CreateButton("Stop Overlay", 706, 26, 128, 42, Color.White, TextPrimary);
-        startOverlayButton = CreateButton("Start Overlay", 846, 26, 126, 42, PrimaryColor, Color.White);
-        closeOverlayButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-        startOverlayButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-        closeOverlayButton.Click += CloseOverlay;
-        startOverlayButton.Click += StartOverlay;
-        card.Controls.Add(closeOverlayButton);
-        card.Controls.Add(startOverlayButton);
+    private Control CreateOverlayRunCard()
+    {
+        var card = CreateCard();
+
+        overlayToggleButton = (RoundedButton)CreateButton("Start Overlay", 16, 26, 188, 44, PrimaryColor, Color.White);
+        overlayToggleButton.Anchor = AnchorStyles.Left | AnchorStyles.Right;
+        overlayToggleButton.Click += ToggleOverlay;
+        card.Controls.Add(overlayToggleButton);
         card.Resize += (s, e) => {
-            startOverlayButton.Left = card.Width - 142;
-            closeOverlayButton.Left = startOverlayButton.Left - 140;
+            overlayToggleButton.Width = Math.Max(120, card.Width - 32);
+            overlayToggleButton.Top = Math.Max(0, (card.Height - overlayToggleButton.Height) / 2);
         };
+        UpdateOverlayToggleButton();
 
         return card;
     }
@@ -502,12 +642,6 @@ public class RemoteControlForm : Form
         activeOverlayMetaLabel = CreateLabel("Load by code or select from My Library.", 24, 80, 360, 18, 8.5f, FontStyle.Regular, TextMuted);
         card.Controls.Add(activeOverlayNameLabel);
         card.Controls.Add(activeOverlayMetaLabel);
-
-        var changeButton = CreateButton("Choose", 486, 22, 86, 36, Color.White, TextPrimary);
-        changeButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-        changeButton.Click += (s, e) => ShowSection(AppSection.Library);
-        card.Controls.Add(changeButton);
-        card.Resize += (s, e) => changeButton.Left = card.Width - 110;
 
         activePreviewCanvas = new RoundedPanel {
             Left = 24,
@@ -538,51 +672,17 @@ public class RemoteControlForm : Form
     {
         var column = new Panel { BackColor = AppBackground };
 
-        var codeCard = CreateCard();
-        codeCard.Left = 0;
-        codeCard.Top = 0;
-        codeCard.Width = 376;
-        codeCard.Height = 154;
-        codeCard.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
-        codeCard.Controls.Add(CreateLabel("Load by code", 20, 18, 200, 24, 12f, FontStyle.Bold, TextPrimary));
-        codeCard.Controls.Add(CreateLabel("Paste a 6-character shared overlay code.", 20, 44, 300, 18, 8f, FontStyle.Regular, TextMuted));
-
-        overlayCodeTextBox = new TextBox {
-            Left = 20,
-            Top = 78,
-            Width = 214,
-            Height = 36,
-            BorderStyle = BorderStyle.FixedSingle,
-            CharacterCasing = CharacterCasing.Upper,
-            MaxLength = 6,
-            Font = new Font("Segoe UI", 10f, FontStyle.Regular)
-        };
-        loadByCodeButton = CreateButton("Load", 246, 76, 110, 38, PrimaryColor, Color.White);
-        loadByCodeButton.Click += LoadByCodeButton_Click;
-        codeLoadStatusLabel = CreateLabel("Invalid codes show a short status message here.", 20, 122, 330, 16, 7.5f, FontStyle.Regular, TextMuted);
-        codeCard.Controls.Add(overlayCodeTextBox);
-        codeCard.Controls.Add(loadByCodeButton);
-        codeCard.Controls.Add(codeLoadStatusLabel);
-
         var libraryCard = CreateCard();
         libraryCard.Left = 0;
-        libraryCard.Top = 176;
+        libraryCard.Top = 0;
         libraryCard.Width = 376;
-        libraryCard.Height = 370;
+        libraryCard.Height = 546;
         libraryCard.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
         libraryCard.Controls.Add(CreateLabel("My Library", 20, 18, 140, 24, 12f, FontStyle.Bold, TextPrimary));
-        librarySearchBox = new TextBox {
-            Left = 168,
-            Top = 16,
-            Width = 188,
-            Height = 36,
-            BorderStyle = BorderStyle.FixedSingle,
-            Font = new Font("Segoe UI", 9f, FontStyle.Regular),
-            Text = ""
-        };
+        var searchHost = CreateRoundedTextBox(out librarySearchBox, 168, 16, 188, 36, 8, 9f);
         librarySearchBox.PlaceholderTextCompat(SearchPlaceholder);
         librarySearchBox.TextChanged += (s, e) => PopulateOverlayList(libraryListPanel);
-        libraryCard.Controls.Add(librarySearchBox);
+        libraryCard.Controls.Add(searchHost);
 
         libraryListPanel = new FlowLayoutPanel {
             Left = 16,
@@ -602,7 +702,7 @@ public class RemoteControlForm : Form
         refreshLibraryButton.Click += RefreshLibraryButton_Click;
         libraryCard.Controls.Add(refreshLibraryButton);
         libraryCard.Resize += (s, e) => {
-            librarySearchBox.Left = libraryCard.Width - 208;
+            searchHost.Left = libraryCard.Width - 208;
             libraryListPanel.Width = libraryCard.Width - 32;
             libraryListPanel.Height = Math.Max(120, libraryCard.Height - 150);
             refreshLibraryButton.Top = libraryCard.Height - 64;
@@ -610,7 +710,6 @@ public class RemoteControlForm : Form
             ResizeLibraryRows();
         };
 
-        column.Controls.Add(codeCard);
         column.Controls.Add(libraryCard);
         return column;
     }
@@ -619,9 +718,7 @@ public class RemoteControlForm : Form
     {
         foreach (Control child in rightColumn.Controls) {
             child.Width = rightColumn.Width;
-            if (child.Top > 0) {
-                child.Height = Math.Max(260, rightColumn.Height - child.Top);
-            }
+            child.Height = Math.Max(260, rightColumn.Height - child.Top);
         }
         ResizeLibraryRows();
     }
@@ -646,7 +743,7 @@ public class RemoteControlForm : Form
 
     private async void RefreshLibraryButton_Click(object sender, EventArgs e)
     {
-        await LoadLibraryAsync();
+        await RefreshAllAsync();
     }
 
     private async void LoadByCodeButton_Click(object sender, EventArgs e)
@@ -782,12 +879,15 @@ public class RemoteControlForm : Form
             }
 
             overlayItems.RemoveAll(item => item.Source == OverlaySource.Library);
+            int savedOrder = 0;
             foreach (var item in resp.Data) {
                 if (item?.Overlay == null) {
                     continue;
                 }
 
-                overlayItems.Add(OverlaySelectionItem.FromLibrary(item, settings.ServerBaseUrl));
+                var cloudItem = OverlaySelectionItem.FromLibrary(item, settings.ServerBaseUrl);
+                cloudItem.SavedOrder = savedOrder++;
+                overlayItems.Add(cloudItem);
             }
         }
 
@@ -824,7 +924,6 @@ public class RemoteControlForm : Form
                 ApplyOverlayResponse(resp.Data, code);
                 AddOrSelectLoadedOverlay(resp.Data);
                 codeLoadStatusLabel.Text = "Loaded: " + resp.Data.Code;
-                overlayStateLabel.Text = "Overlay loaded";
             }
             catch (Exception ex) {
                 codeLoadStatusLabel.Text = BuildFriendlyApplyError(ex);
@@ -886,7 +985,6 @@ public class RemoteControlForm : Form
                 ApplyOverlayResponse(resp.Data, item.Code);
                 AddOrSelectLoadedOverlay(resp.Data);
                 UpdateSelectedOverlayUi("Selected: " + item.DisplayName);
-                overlayStateLabel.Text = "Overlay loaded";
             }
             catch (Exception ex) {
                 UpdateSelectedOverlayUi(BuildFriendlyApplyError(ex));
@@ -919,16 +1017,28 @@ public class RemoteControlForm : Form
                     continue;
                 }
 
-                string[] parts = raw.Split(new[] { '|' }, 3);
+                string[] parts = raw.Split(new[] { '|' }, 5);
                 if (parts.Length < 2) {
                     continue;
+                }
+
+                DateTime? lastUsed = null;
+                if (parts.Length > 3 && long.TryParse(Unescape(parts[3]), out long ticks) && ticks > 0) {
+                    try { lastUsed = new DateTime(ticks, DateTimeKind.Utc); } catch { lastUsed = null; }
+                }
+
+                int runCount = 0;
+                if (parts.Length > 4) {
+                    int.TryParse(Unescape(parts[4]), out runCount);
                 }
 
                 overlayItems.Add(new OverlaySelectionItem {
                     Source = OverlaySource.LocalCache,
                     Code = Unescape(parts[0]),
                     DisplayName = string.IsNullOrWhiteSpace(Unescape(parts[1])) ? "(Untitled)" : Unescape(parts[1]),
-                    OverlayId = parts.Length > 2 ? Unescape(parts[2]) : null
+                    OverlayId = parts.Length > 2 ? Unescape(parts[2]) : null,
+                    LastUsedUtc = lastUsed,
+                    RunCount = runCount
                 });
             }
         }
@@ -941,26 +1051,252 @@ public class RemoteControlForm : Form
 
     private void AddOrSelectLoadedOverlay(OverlayDetailResponse overlay)
     {
+        AddLocalOverlay(overlay, select: true);
+    }
+
+    private OverlaySelectionItem AddLocalOverlay(OverlayDetailResponse overlay, bool select)
+    {
         if (overlay == null) {
-            return;
+            return null;
         }
 
         string code = string.IsNullOrWhiteSpace(overlay.Code) ? "UNKNOWN" : overlay.Code.Trim().ToUpperInvariant();
         string title = string.IsNullOrWhiteSpace(overlay.Name) ? "(Untitled)" : overlay.Name.Trim();
 
+        // Preserve usage stats if a local copy with the same code already exists.
+        var existing = overlayItems.FirstOrDefault(item => item.Source == OverlaySource.LocalCache
+            && string.Equals(item.Code, code, StringComparison.OrdinalIgnoreCase));
         overlayItems.RemoveAll(item => item.Source == OverlaySource.LocalCache && string.Equals(item.Code, code, StringComparison.OrdinalIgnoreCase));
 
         var loadedItem = new OverlaySelectionItem {
             Source = OverlaySource.LocalCache,
             Code = code,
             DisplayName = title,
-            OverlayId = overlay.OverlayId
+            OverlayId = overlay.OverlayId,
+            Platform = overlay.Platform,
+            LastUsedUtc = existing?.LastUsedUtc,
+            RunCount = existing?.RunCount ?? 0
         };
 
         overlayItems.Insert(0, loadedItem);
         SaveLoadedOverlaysToStore();
-        SelectOverlayItem(loadedItem);
+        if (select) {
+            SelectOverlayItem(loadedItem);
+        }
         RenderOverlayPreviewCards();
+        return loadedItem;
+    }
+
+    // ---- Library item actions -------------------------------------------------
+
+    private async Task RefreshAllAsync()
+    {
+        LoadCachedOverlayCards();
+
+        if (!string.IsNullOrWhiteSpace(accessToken)) {
+            await LoadLibraryAsync();
+        }
+        else {
+            RenderOverlayPreviewCards();
+            UpdateSelectedOverlayUi("Login to load cloud overlays.");
+        }
+    }
+
+    private async Task RunOverlayItemAsync(OverlaySelectionItem item)
+    {
+        if (item == null) {
+            return;
+        }
+
+        SelectOverlayItem(item);
+
+        string usageCode = item.Code;
+        if (item.Source == OverlaySource.Library) {
+            await ApplyLibraryOverlayAsync(item);
+        }
+        else {
+            ApplyCachedOverlay(item);
+        }
+
+        MarkLocalUsed(usageCode);
+        RenderOverlayPreviewCards();
+        StartOverlay();
+    }
+
+    // Records that a local overlay was run, for the Local "recently used" sort order.
+    private void MarkLocalUsed(string code)
+    {
+        if (string.IsNullOrWhiteSpace(code)) {
+            return;
+        }
+
+        var local = overlayItems.FirstOrDefault(i => i.Source == OverlaySource.LocalCache
+            && string.Equals(i.Code, code, StringComparison.OrdinalIgnoreCase));
+        if (local == null) {
+            return;
+        }
+
+        local.LastUsedUtc = DateTime.UtcNow;
+        local.RunCount += 1;
+        SaveLoadedOverlaysToStore();
+    }
+
+    private void DeleteLocalOverlay(OverlaySelectionItem item)
+    {
+        if (item == null || item.Source != OverlaySource.LocalCache) {
+            return;
+        }
+
+        var confirm = MessageBox.Show(
+            this,
+            $"Delete the local overlay \"{item.DisplayName}\"?\nThe downloaded copy will be removed from this PC.",
+            "Delete local overlay",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Warning);
+
+        if (confirm != DialogResult.Yes) {
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(item.Code)) {
+            overlayCacheService.DeleteOverlayJson(item.Code);
+            overlayDocumentCache.Remove(item.Code);
+        }
+
+        overlayItems.RemoveAll(i => i.Source == OverlaySource.LocalCache
+            && string.Equals(i.Code, item.Code, StringComparison.OrdinalIgnoreCase));
+        SaveLoadedOverlaysToStore();
+
+        if (ReferenceEquals(selectedOverlayItem, item)) {
+            selectedOverlayItem = null;
+            activeOverlayDocument = null;
+        }
+
+        RenderOverlayPreviewCards();
+        UpdateSelectedOverlayUi("Deleted: " + item.DisplayName);
+    }
+
+    private async Task DownloadCloudOverlayAsync(OverlaySelectionItem item)
+    {
+        if (item == null || item.Source != OverlaySource.Library || item.OverlayDatabaseId <= 0) {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(accessToken)) {
+            UpdateSelectedOverlayUi("Login is required.");
+            return;
+        }
+
+        UpdateSelectedOverlayUi("Downloading: " + item.DisplayName);
+        var settings = appSettingsService.Current ?? appSettingsService.LoadOrCreate();
+
+        using (var api = new MspApiClient(settings.ServerBaseUrl))
+        {
+            var resp = await api.GetOverlayDetailAsync(item.OverlayDatabaseId, accessToken).ConfigureAwait(true);
+            if (resp == null || !resp.Success || resp.Data == null) {
+                UpdateSelectedOverlayUi(resp?.Message ?? "Download failed.");
+                return;
+            }
+
+            try {
+                var detail = resp.Data;
+                if (string.IsNullOrWhiteSpace(detail.OverlayJson)) {
+                    throw new InvalidDataException("Server response does not include overlayJson.");
+                }
+
+                string cacheCode = string.IsNullOrWhiteSpace(detail.Code)
+                    ? (item.Code ?? string.Empty).Trim().ToUpperInvariant()
+                    : detail.Code.Trim().ToUpperInvariant();
+
+                overlayCacheService.SaveOverlayJson(cacheCode, detail.OverlayJson);
+                overlayDocumentCache.Remove(cacheCode);
+                detail.Code = cacheCode;
+
+                AddLocalOverlay(detail, select: false);
+                UpdateSelectedOverlayUi("Downloaded: " + item.DisplayName);
+            }
+            catch (Exception ex) {
+                UpdateSelectedOverlayUi(BuildFriendlyApplyError(ex));
+                ErrorLogger.LogError("E222", "Cloud overlay download failed: " + ex.Message);
+            }
+        }
+    }
+
+    // ---- Favorites ------------------------------------------------------------
+
+    private static string FavoriteKey(OverlaySelectionItem item)
+    {
+        if (item == null) {
+            return null;
+        }
+
+        if (!string.IsNullOrWhiteSpace(item.OverlayId)) {
+            return "id:" + item.OverlayId.Trim();
+        }
+
+        if (!string.IsNullOrWhiteSpace(item.Code)) {
+            return "code:" + item.Code.Trim().ToUpperInvariant();
+        }
+
+        return null;
+    }
+
+    private bool IsFavorite(OverlaySelectionItem item)
+    {
+        string key = FavoriteKey(item);
+        return key != null && favoriteKeys.Contains(key);
+    }
+
+    private void ToggleFavorite(OverlaySelectionItem item)
+    {
+        string key = FavoriteKey(item);
+        if (key == null) {
+            return;
+        }
+
+        if (!favoriteKeys.Remove(key)) {
+            favoriteKeys.Add(key);
+        }
+
+        SaveFavorites();
+        RenderOverlayPreviewCards();
+    }
+
+    private void LoadFavorites()
+    {
+        favoriteKeys.Clear();
+
+        if (string.IsNullOrWhiteSpace(favoritesStorePath) || !File.Exists(favoritesStorePath)) {
+            return;
+        }
+
+        try {
+            foreach (string raw in File.ReadAllLines(favoritesStorePath)) {
+                string key = Unescape(raw)?.Trim();
+                if (!string.IsNullOrWhiteSpace(key)) {
+                    favoriteKeys.Add(key);
+                }
+            }
+        }
+        catch (Exception ex) {
+            ErrorLogger.LogError("E215", "Favorites read failed: " + ex.Message);
+        }
+    }
+
+    private void SaveFavorites()
+    {
+        if (string.IsNullOrWhiteSpace(favoritesStorePath)) {
+            return;
+        }
+
+        try {
+            Directory.CreateDirectory(Path.GetDirectoryName(favoritesStorePath));
+            var lines = favoriteKeys.Select(Escape).ToArray();
+            File.WriteAllLines(favoritesStorePath, lines);
+        }
+        catch (Exception ex) {
+            ErrorLogger.LogError("E216", "Favorites save failed: " + ex.Message);
+        }
     }
 
     private void SaveLoadedOverlaysToStore()
@@ -978,7 +1314,13 @@ public class RemoteControlForm : Form
                     continue;
                 }
 
-                lines.Add(Escape(item.Code) + "|" + Escape(item.DisplayName) + "|" + Escape(item.OverlayId));
+                string lastUsedTicks = item.LastUsedUtc.HasValue ? item.LastUsedUtc.Value.Ticks.ToString() : "0";
+                lines.Add(string.Join("|",
+                    Escape(item.Code),
+                    Escape(item.DisplayName),
+                    Escape(item.OverlayId),
+                    Escape(lastUsedTicks),
+                    Escape(item.RunCount.ToString())));
             }
 
             File.WriteAllLines(loadedOverlayStorePath, lines.ToArray());
@@ -991,7 +1333,8 @@ public class RemoteControlForm : Form
     private void RenderOverlayPreviewCards()
     {
         PopulateOverlayList(libraryListPanel);
-        PopulateOverlayList(fullLibraryListPanel);
+        PopulateOverlayList(cloudListPanel);
+        PopulateOverlayList(localListPanel);
         ResizeLibraryRows();
         UpdateActiveOverlayLabels();
         activePreviewCanvas?.Invalidate();
@@ -1006,40 +1349,109 @@ public class RemoteControlForm : Form
         panel.SuspendLayout();
         panel.Controls.Clear();
 
-        var items = GetFilteredItemsForPanel(panel);
-
-        if (items.Count == 0) {
-            if (overlayItems.Count == 0) {
-                panel.Controls.Add(CreateLibraryRowShell("No overlays yet", "Load a code or refresh library.", null, false));
-            }
-            else {
-                panel.Controls.Add(CreateLibraryRowShell("No matching overlays", "Try a different search or filter.", null, false));
-            }
+        if (panel == cloudListPanel) {
+            PopulateCloudColumn(panel);
+        }
+        else if (panel == localListPanel) {
+            PopulateLocalColumn(panel);
         }
         else {
-            foreach (var item in items) {
-                panel.Controls.Add(CreateLibraryRow(item));
-            }
+            PopulateHomeQuickList(panel);
         }
 
         panel.ResumeLayout();
         ResizeLibraryRows(panel);
     }
 
-    private List<OverlaySelectionItem> GetFilteredItemsForPanel(FlowLayoutPanel panel)
+    // Home quick-run list: locally downloaded overlays only, most-recently-used first.
+    private void PopulateHomeQuickList(FlowLayoutPanel panel)
     {
-        if (panel == fullLibraryListPanel) {
-            return FilterOverlayItems(
-                fullLibrarySearchBox?.Text,
-                categoryFilter?.SelectedItem as string,
-                platformFilter?.SelectedItem as string);
+        var local = SortLocal(FilterOverlayItems(librarySearchBox?.Text, "Local", null));
+
+        if (local.Count == 0) {
+            panel.Controls.Add(overlayItems.Count == 0
+                ? CreateMessageRow("No overlays yet", "Downloaded overlays appear here.")
+                : CreateMessageRow("No local overlays", "Download an overlay from the Library tab to run it here."));
+            return;
         }
 
-        if (panel == libraryListPanel) {
-            return FilterOverlayItems(librarySearchBox?.Text, null, null);
+        foreach (var item in local) {
+            panel.Controls.Add(CreateLibraryRow(item, management: false));
+        }
+    }
+
+    // Library tab left column: cloud (account) overlays without a local copy.
+    private void PopulateCloudColumn(FlowLayoutPanel panel)
+    {
+        string platform = platformFilter?.SelectedItem as string;
+        var cloud = SortCloud(FilterOverlayItems(fullLibrarySearchBox?.Text, null, platform)
+            .Where(i => i.Source == OverlaySource.Library && !HasLocalCopy(i)));
+
+        if (cloudCountLabel != null) {
+            cloudCountLabel.Text = cloud.Count.ToString();
         }
 
-        return overlayItems.ToList();
+        if (cloud.Count == 0) {
+            panel.Controls.Add(CreateMessageRow("No cloud overlays", "Sign in and refresh to load your account library."));
+            return;
+        }
+
+        foreach (var item in cloud) {
+            panel.Controls.Add(CreateLibraryRow(item, management: true));
+        }
+    }
+
+    // Library tab right column: overlays downloaded to this PC.
+    private void PopulateLocalColumn(FlowLayoutPanel panel)
+    {
+        string platform = platformFilter?.SelectedItem as string;
+        var local = SortLocal(FilterOverlayItems(fullLibrarySearchBox?.Text, null, platform)
+            .Where(i => i.Source == OverlaySource.LocalCache));
+
+        if (localCountLabel != null) {
+            localCountLabel.Text = local.Count.ToString();
+        }
+
+        if (local.Count == 0) {
+            panel.Controls.Add(CreateMessageRow("No local overlays", "Download a cloud overlay to keep it here."));
+            return;
+        }
+
+        foreach (var item in local) {
+            panel.Controls.Add(CreateLibraryRow(item, management: true));
+        }
+    }
+
+    private bool HasLocalCopy(OverlaySelectionItem cloudItem)
+    {
+        if (cloudItem == null) {
+            return false;
+        }
+
+        return overlayItems.Any(i => i.Source == OverlaySource.LocalCache && (
+            (!string.IsNullOrWhiteSpace(cloudItem.Code) && string.Equals(i.Code, cloudItem.Code, StringComparison.OrdinalIgnoreCase)) ||
+            (!string.IsNullOrWhiteSpace(cloudItem.OverlayId) && string.Equals(i.OverlayId, cloudItem.OverlayId, StringComparison.OrdinalIgnoreCase))));
+    }
+
+    // Local: favorites first, then most-recently-used, then most-run, then name.
+    private List<OverlaySelectionItem> SortLocal(IEnumerable<OverlaySelectionItem> items)
+    {
+        return items
+            .OrderByDescending(i => IsFavorite(i))
+            .ThenByDescending(i => i.LastUsedUtc ?? DateTime.MinValue)
+            .ThenByDescending(i => i.RunCount)
+            .ThenBy(i => i.DisplayName ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    // Cloud: favorites first, then the order the library saved them, then name.
+    private List<OverlaySelectionItem> SortCloud(IEnumerable<OverlaySelectionItem> items)
+    {
+        return items
+            .OrderByDescending(i => IsFavorite(i))
+            .ThenBy(i => i.SavedOrder)
+            .ThenBy(i => i.DisplayName ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+            .ToList();
     }
 
     private List<OverlaySelectionItem> FilterOverlayItems(string search, string category, string platform)
@@ -1069,51 +1481,118 @@ public class RemoteControlForm : Form
         return items.ToList();
     }
 
-    private Control CreateLibraryRow(OverlaySelectionItem item)
-    {
-        var selected = ReferenceEquals(item, selectedOverlayItem);
-        var row = CreateLibraryRowShell(item.DisplayName, item.BuildShortMetaText(), item, selected);
-        row.Click += async (s, e) => await SelectAndApplyOverlayItemAsync(item);
-
-        foreach (Control control in row.Controls) {
-            control.Click += async (s, e) => await SelectAndApplyOverlayItemAsync(item);
-        }
-
-        return row;
-    }
-
-    private RoundedPanel CreateLibraryRowShell(string title, string meta, OverlaySelectionItem item, bool selected)
+    private Control CreateMessageRow(string title, string meta)
     {
         var row = new RoundedPanel {
             Width = 344,
             Height = 66,
             Radius = 9,
             Margin = new Padding(0, 0, 0, 8),
+            BackColor = CardBackground,
+            BorderColor = BorderColor,
+            Cursor = Cursors.Default
+        };
+
+        row.Controls.Add(CreateLabel(title, 16, 14, 300, 18, 9f, FontStyle.Bold, TextPrimary));
+        row.Controls.Add(CreateLabel(meta, 16, 35, 312, 16, 8f, FontStyle.Regular, TextMuted));
+        return row;
+    }
+
+    private Control CreateLibraryRow(OverlaySelectionItem item, bool management)
+    {
+        bool selected = ReferenceEquals(item, selectedOverlayItem);
+        bool isLocal = item.Source == OverlaySource.LocalCache;
+        bool favorite = IsFavorite(item);
+
+        var row = new RoundedPanel {
+            Width = 344,
+            Height = 74,
+            Radius = 9,
+            Margin = new Padding(0, 0, 0, 8),
             BackColor = selected ? SelectedBackground : CardBackground,
             BorderColor = selected ? Color.FromArgb(147, 197, 253) : BorderColor,
-            Cursor = item == null ? Cursors.Default : Cursors.Hand,
+            Cursor = Cursors.Hand,
             Tag = item
         };
 
         var preview = new RoundedPanel {
             Left = 12,
-            Top = 10,
-            Width = 70,
-            Height = 46,
+            Top = 12,
+            Width = 64,
+            Height = 50,
             Radius = 6,
-            BackColor = item != null && item.Source == OverlaySource.Library ? Color.FromArgb(219, 234, 254) : Color.FromArgb(224, 242, 254),
-            BorderColor = Color.Transparent
+            BackColor = isLocal ? Color.FromArgb(224, 242, 254) : Color.FromArgb(219, 234, 254),
+            BorderColor = Color.Transparent,
+            Tag = item
         };
-        preview.Tag = item;
         preview.Paint += DrawMiniPreview;
         row.Controls.Add(preview);
 
-        row.Controls.Add(CreateLabel(title, 94, 10, 168, 18, 8.5f, FontStyle.Bold, TextPrimary));
-        row.Controls.Add(CreateLabel(meta, 94, 31, 168, 14, 7.5f, FontStyle.Regular, TextMuted));
+        // Source badge: distinguishes locally downloaded vs cloud (account) overlays.
+        var badge = new PillLabel {
+            Text = isLocal ? "LOCAL" : "CLOUD",
+            Left = 88,
+            Top = 37,
+            Width = 52,
+            Height = 18,
+            Font = new Font("Segoe UI", 7f, FontStyle.Bold),
+            ForeColor = isLocal ? SuccessText : PrimaryColor,
+            BackColor = isLocal ? SuccessBackground : ChipBackground,
+            Radius = 9,
+            TextAlign = ContentAlignment.MiddleCenter
+        };
+        row.Controls.Add(badge);
 
-        if (selected) {
-            row.Controls.Add(CreateStatusPill("ACTIVE", 270, 21, 60, PrimaryColor, Color.White));
+        // Action buttons sit in fixed columns (same x on every row) anchored to the
+        // right edge, so the layout never looks ragged between Local and Cloud rows.
+        const int rightPad = 16;
+        const int favW = 36;
+        const int runW = 56;
+        const int manageW = 92;
+        const int gapA = 8;
+        int actionTop = (74 - 30) / 2;
+
+        int manageLeft = 344 - rightPad - manageW;
+        int runLeft = management ? manageLeft - gapA - runW : 344 - rightPad - runW;
+        int favLeft = runLeft - gapA - favW;
+
+        void AddActionAt(int left, string text, int w, Color back, Color fore, Action onClick)
+        {
+            var b = (RoundedButton)CreateButton(text, left, actionTop, w, 30, back, fore);
+            b.Font = new Font("Segoe UI", 8f, FontStyle.Bold);
+            b.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            b.Click += (s, e) => onClick();
+            row.Controls.Add(b);
         }
+
+        if (management) {
+            if (isLocal) {
+                AddActionAt(manageLeft, "Delete", manageW, Color.White, Color.FromArgb(220, 38, 38), () => DeleteLocalOverlay(item));
+            }
+            else {
+                AddActionAt(manageLeft, "Download", manageW, PrimaryColor, Color.White, () => { _ = DownloadCloudOverlayAsync(item); });
+            }
+        }
+
+        AddActionAt(runLeft, "Run", runW, isLocal ? PrimaryColor : Color.White, isLocal ? Color.White : TextPrimary, () => { _ = RunOverlayItemAsync(item); });
+        AddActionAt(favLeft, favorite ? "★" : "☆", favW, Color.White, favorite ? Color.FromArgb(245, 158, 11) : TextMuted, () => ToggleFavorite(item));
+
+        // Title + meta fill the remaining space to the left of the action columns.
+        int textRight = favLeft - gapA;
+        var titleLabel = CreateLabel(item.DisplayName, 88, 13, Math.Max(60, textRight - 88), 18, 8.5f, FontStyle.Bold, TextPrimary);
+        titleLabel.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+        row.Controls.Add(titleLabel);
+
+        var meta = CreateLabel(item.BuildShortMetaText(), 148, 38, Math.Max(40, textRight - 148), 14, 7.5f, FontStyle.Regular, TextMuted);
+        meta.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+        row.Controls.Add(meta);
+
+        void Select(object s, EventArgs e) { _ = SelectAndApplyOverlayItemAsync(item); }
+        row.Click += Select;
+        preview.Click += Select;
+        titleLabel.Click += Select;
+        badge.Click += Select;
+        meta.Click += Select;
 
         return row;
     }
@@ -1187,7 +1666,6 @@ public class RemoteControlForm : Form
             applyService.Apply(doc);
             appSettingsService.UpdateLastSelectedOverlayId(string.IsNullOrWhiteSpace(item.OverlayId) ? item.Code : item.OverlayId);
             UpdateSelectedOverlayUi("Selected: " + item.DisplayName);
-            overlayStateLabel.Text = "Overlay loaded";
         }
         catch (Exception ex) {
             UpdateSelectedOverlayUi(BuildFriendlyApplyError(ex));
@@ -1198,7 +1676,8 @@ public class RemoteControlForm : Form
     private void ResizeLibraryRows()
     {
         ResizeLibraryRows(libraryListPanel);
-        ResizeLibraryRows(fullLibraryListPanel);
+        ResizeLibraryRows(cloudListPanel);
+        ResizeLibraryRows(localListPanel);
     }
 
     private void ResizeLibraryRows(FlowLayoutPanel panel)
@@ -1207,8 +1686,16 @@ public class RemoteControlForm : Form
             return;
         }
 
+        int width = panel.ClientSize.Width - 4;
+
+        // Leave room for the vertical scrollbar so rows never spill past the right
+        // edge and trigger a horizontal scrollbar.
+        if (panel.VerticalScroll.Visible) {
+            width -= SystemInformation.VerticalScrollBarWidth;
+        }
+
         foreach (Control control in panel.Controls) {
-            control.Width = Math.Max(260, panel.ClientSize.Width - 4);
+            control.Width = Math.Max(260, width);
         }
     }
 
@@ -1229,7 +1716,17 @@ public class RemoteControlForm : Form
         }
     }
 
-    private void StartOverlay(object sender, EventArgs e)
+    private void ToggleOverlay(object sender, EventArgs e)
+    {
+        if (IsOverlayRunning()) {
+            StopOverlay();
+        }
+        else {
+            StartOverlay();
+        }
+    }
+
+    private void StartOverlay()
     {
         if (processList.SelectedItem == null) {
             UpdateSelectedOverlayUi("Choose a game window first.");
@@ -1238,13 +1735,61 @@ public class RemoteControlForm : Form
 
         var selectedProcess = (ProcessItem)processList.SelectedItem;
         OverlayForm.ShowOverlay(selectedProcess.ProcessName);
-        overlayStateLabel.Text = "Overlay running";
+
+        var instance = OverlayForm.Instance;
+        if (instance != null) {
+            // Keep the toggle in sync when the overlay closes by any means (e.g. hotkey).
+            instance.FormClosed += OverlayClosed;
+        }
+
+        UpdateOverlayToggleButton();
     }
 
-    private void CloseOverlay(object sender, EventArgs e)
+    private void StopOverlay()
     {
         OverlayForm.Instance?.Close();
-        overlayStateLabel.Text = selectedOverlayItem == null ? "No overlay" : "Overlay loaded";
+        UpdateOverlayToggleButton();
+    }
+
+    private void OverlayClosed(object sender, FormClosedEventArgs e)
+    {
+        if (sender is Form form) {
+            form.FormClosed -= OverlayClosed;
+        }
+
+        if (IsHandleCreated && !IsDisposed) {
+            BeginInvoke((Action)UpdateOverlayToggleButton);
+        }
+    }
+
+    private static bool IsOverlayRunning()
+    {
+        var instance = OverlayForm.Instance;
+        return instance != null && !instance.IsDisposed;
+    }
+
+    private void UpdateOverlayToggleButton()
+    {
+        if (overlayToggleButton == null) {
+            return;
+        }
+
+        if (IsOverlayRunning()) {
+            overlayToggleButton.Text = "Stop Overlay";
+            overlayToggleButton.BackColor = Color.White;
+            overlayToggleButton.ForeColor = TextPrimary;
+            overlayToggleButton.BorderColor = BorderColor;
+            overlayToggleButton.HoverBackColor = Color.FromArgb(248, 250, 252);
+        }
+        else {
+            overlayToggleButton.Text = "Start Overlay";
+            overlayToggleButton.BackColor = PrimaryColor;
+            overlayToggleButton.ForeColor = Color.White;
+            overlayToggleButton.BorderColor = PrimaryColor;
+            overlayToggleButton.HoverBackColor = PrimaryHoverColor;
+        }
+
+        overlayToggleButton.Invalidate();
     }
 
     private void UpdateAuthUi()
@@ -1254,7 +1799,8 @@ public class RemoteControlForm : Form
         loginStatusLabel.Text = loggedIn ? "Signed in" : "Signed out";
         loginGoogleButton.Visible = !loggedIn;
         logoutButton.Visible = loggedIn;
-        refreshLibraryButton.Enabled = loggedIn;
+        // Refresh also reloads locally downloaded overlays, so it works signed out too.
+        refreshLibraryButton.Enabled = true;
     }
 
     private void UpdateSelectedOverlayUi(string status)
@@ -1274,9 +1820,6 @@ public class RemoteControlForm : Form
         if (selectedOverlayItem == null) {
             activeOverlayNameLabel.Text = "No overlay selected";
             activeOverlayMetaLabel.Text = "Load by code or select from My Library.";
-            if (overlayStateLabel != null) {
-                overlayStateLabel.Text = "No overlay";
-            }
             return;
         }
 
@@ -1291,6 +1834,7 @@ public class RemoteControlForm : Form
         var bounds = activePreviewCanvas.ClientRectangle;
         bounds.Inflate(-12, -12);
 
+        // Always draw the basic grid; no placeholder markers.
         using (var gridPen = new Pen(Color.FromArgb(203, 213, 225), 1))
         {
             for (int i = 1; i < 6; i++) {
@@ -1304,25 +1848,9 @@ public class RemoteControlForm : Form
             }
         }
 
+        // Draw the overlay on top of the grid only when one is selected.
         if (activeOverlayDocument != null) {
             Renderer.DrawOverlayDocument(g, bounds, activeOverlayDocument);
-            return;
-        }
-
-        DrawActivePreviewPlaceholder(g, bounds);
-    }
-
-    private void DrawActivePreviewPlaceholder(Graphics g, Rectangle bounds)
-    {
-        using (var primary = new SolidBrush(PrimaryColor))
-        using (var cyan = new SolidBrush(Color.FromArgb(6, 182, 212)))
-        using (var marker = new SolidBrush(Color.FromArgb(217, 70, 239)))
-        {
-            g.FillRoundedRectangle(primary, bounds.Left + bounds.Width / 5, bounds.Top + 48, bounds.Width / 3, 6, 3);
-            g.FillRoundedRectangle(cyan, bounds.Left + bounds.Width * 3 / 5, bounds.Top + 54, bounds.Width / 5, 30, 4);
-            g.FillRoundedRectangle(marker, bounds.Left + 36, bounds.Top + bounds.Height / 2 - 7, 14, 14, 4);
-            g.FillRoundedRectangle(marker, bounds.Left + bounds.Width / 2 - 7, bounds.Top + bounds.Height / 2 - 7, 14, 14, 4);
-            g.FillRoundedRectangle(marker, bounds.Right - 54, bounds.Top + bounds.Height / 2 - 7, 14, 14, 4);
         }
     }
 
@@ -1406,7 +1934,7 @@ public class RemoteControlForm : Form
 
     private ComboBox CreateComboBox(int left, int top, int width)
     {
-        return new ComboBox {
+        var combo = new ComboBox {
             Left = left,
             Top = top,
             Width = width,
@@ -1414,11 +1942,53 @@ public class RemoteControlForm : Form
             FlatStyle = FlatStyle.Flat,
             Font = new Font("Segoe UI", 10f, FontStyle.Bold)
         };
+        MakeRounded(combo, 8);
+        return combo;
+    }
+
+    // Hosts a borderless TextBox inside a RoundedPanel so the rounded border is
+    // painted as one smooth, continuous outline. (Clipping a FixedSingle TextBox
+    // with a Region cut the straight border into disconnected segments.)
+    private RoundedPanel CreateRoundedTextBox(out TextBox textBox, int left, int top, int width, int height, int radius, float fontSize)
+    {
+        var host = new RoundedPanel {
+            Left = left,
+            Top = top,
+            Width = width,
+            Height = height,
+            Radius = radius,
+            BackColor = Color.White,
+            BorderColor = BorderColor,
+            Cursor = Cursors.IBeam
+        };
+
+        var inner = new TextBox {
+            BorderStyle = BorderStyle.None,
+            BackColor = Color.White,
+            Font = new Font("Segoe UI", fontSize, FontStyle.Regular)
+        };
+        host.Controls.Add(inner);
+
+        void LayoutInner()
+        {
+            inner.Left = 12;
+            inner.Width = Math.Max(0, host.Width - 24);
+            inner.Top = Math.Max(0, (host.Height - inner.Height) / 2);
+        }
+
+        host.HandleCreated += (s, e) => LayoutInner();
+        inner.HandleCreated += (s, e) => LayoutInner();
+        host.Resize += (s, e) => LayoutInner();
+        host.Click += (s, e) => inner.Focus();
+        LayoutInner();
+
+        textBox = inner;
+        return host;
     }
 
     private Button CreateButton(string text, int left, int top, int width, int height, Color backColor, Color foreColor)
     {
-        var button = new Button {
+        return new RoundedButton {
             Text = text,
             Left = left,
             Top = top,
@@ -1426,15 +1996,30 @@ public class RemoteControlForm : Form
             Height = height,
             BackColor = backColor,
             ForeColor = foreColor,
-            FlatStyle = FlatStyle.Flat,
             Font = new Font("Segoe UI", 8.5f, FontStyle.Bold),
-            UseVisualStyleBackColor = false
+            Radius = 8,
+            BorderColor = backColor == Color.White ? BorderColor : backColor,
+            HoverBackColor = backColor == PrimaryColor ? PrimaryHoverColor : Color.FromArgb(248, 250, 252),
+            Cursor = Cursors.Hand
         };
+    }
 
-        button.FlatAppearance.BorderSize = 1;
-        button.FlatAppearance.BorderColor = backColor == Color.White ? BorderColor : backColor;
-        button.FlatAppearance.MouseOverBackColor = backColor == PrimaryColor ? PrimaryHoverColor : Color.FromArgb(248, 250, 252);
-        return button;
+    private static void ApplyRoundedRegion(Control control, int radius)
+    {
+        if (control == null || control.Width <= 0 || control.Height <= 0) {
+            return;
+        }
+
+        using (var path = RoundedPanel.CreateRoundRectPath(new Rectangle(0, 0, control.Width, control.Height), radius)) {
+            control.Region = new Region(path);
+        }
+    }
+
+    private static void MakeRounded(Control control, int radius)
+    {
+        ApplyRoundedRegion(control, radius);
+        control.Resize += (s, e) => ApplyRoundedRegion(control, radius);
+        control.HandleCreated += (s, e) => ApplyRoundedRegion(control, radius);
     }
 
     private static string GetOverlaySelectionId(OverlayDetailResponse overlay, string parsedOverlayId)
@@ -1536,6 +2121,13 @@ public class RemoteControlForm : Form
         public string Platform { get; set; }
         public string ThumbnailUrl { get; set; }
 
+        // Local usage stats (used for the Local sort order).
+        public DateTime? LastUsedUtc { get; set; }
+        public int RunCount { get; set; }
+
+        // Order the cloud library returned this item (used for the Cloud sort order).
+        public int SavedOrder { get; set; }
+
         public static OverlaySelectionItem FromLibrary(LibraryItemResponse item, string serverBaseUrl)
         {
             var overlay = item.Overlay;
@@ -1595,6 +2187,19 @@ public class RemoteControlForm : Form
             ResizeRedraw = true;
         }
 
+        protected override void OnPaintBackground(PaintEventArgs e)
+        {
+            // Fill the whole control (including the corner area outside the rounded
+            // path) with the parent's background so the rounded corners blend into
+            // whatever is behind the panel instead of showing the panel's own color.
+            if (Parent != null) {
+                e.Graphics.Clear(Parent.BackColor);
+            }
+            else {
+                base.OnPaintBackground(e);
+            }
+        }
+
         protected override void OnPaint(PaintEventArgs e)
         {
             e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
@@ -1622,6 +2227,105 @@ public class RemoteControlForm : Form
         }
     }
 
+    private sealed class RoundedButton : Button
+    {
+        public int Radius { get; set; } = 8;
+        public Color BorderColor { get; set; } = Color.FromArgb(216, 224, 234);
+        public Color HoverBackColor { get; set; } = Color.FromArgb(248, 250, 252);
+
+        private bool hovered;
+
+        public RoundedButton()
+        {
+            SetStyle(
+                ControlStyles.UserPaint
+                    | ControlStyles.AllPaintingInWmPaint
+                    | ControlStyles.OptimizedDoubleBuffer
+                    | ControlStyles.ResizeRedraw,
+                true);
+            FlatStyle = FlatStyle.Flat;
+            FlatAppearance.BorderSize = 0;
+        }
+
+        protected override bool ShowFocusCues => false;
+
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+            ApplyRoundedRegion();
+        }
+
+        protected override void OnResize(EventArgs e)
+        {
+            base.OnResize(e);
+            ApplyRoundedRegion();
+        }
+
+        private void ApplyRoundedRegion()
+        {
+            // Clip the button to its rounded shape so the rectangular focus/default
+            // border the framework paints does not poke out past the rounded corners.
+            if (Width <= 0 || Height <= 0) {
+                return;
+            }
+
+            using (var path = RoundedPanel.CreateRoundRectPath(new Rectangle(0, 0, Width, Height), Radius)) {
+                Region = new Region(path);
+            }
+        }
+
+        protected override void OnMouseEnter(EventArgs e)
+        {
+            hovered = true;
+            Invalidate();
+            base.OnMouseEnter(e);
+        }
+
+        protected override void OnMouseLeave(EventArgs e)
+        {
+            hovered = false;
+            Invalidate();
+            base.OnMouseLeave(e);
+        }
+
+        protected override void OnPaintBackground(PaintEventArgs pevent)
+        {
+            if (Parent != null) {
+                pevent.Graphics.Clear(Parent.BackColor);
+            }
+            else {
+                base.OnPaintBackground(pevent);
+            }
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+
+            Color fillColor = !Enabled
+                ? Color.FromArgb(241, 245, 249)
+                : (hovered ? HoverBackColor : BackColor);
+            Color textColor = Enabled ? ForeColor : Color.FromArgb(148, 163, 184);
+
+            var bounds = new Rectangle(0, 0, Width - 1, Height - 1);
+            using (var path = RoundedPanel.CreateRoundRectPath(bounds, Radius))
+            using (var fill = new SolidBrush(fillColor))
+            using (var border = new Pen(BorderColor))
+            {
+                e.Graphics.FillPath(fill, path);
+                e.Graphics.DrawPath(border, path);
+            }
+
+            TextRenderer.DrawText(
+                e.Graphics,
+                Text,
+                Font,
+                ClientRectangle,
+                textColor,
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+        }
+    }
+
     private sealed class PillLabel : Label
     {
         public int Radius { get; set; } = 12;
@@ -1629,6 +2333,20 @@ public class RemoteControlForm : Form
         public PillLabel()
         {
             AutoSize = false;
+            DoubleBuffered = true;
+        }
+
+        protected override void OnPaintBackground(PaintEventArgs e)
+        {
+            // Paint the corner area outside the rounded path with the parent's
+            // background so the pill's corners are not rendered as opaque squares
+            // of the pill color.
+            if (Parent != null) {
+                e.Graphics.Clear(Parent.BackColor);
+            }
+            else {
+                base.OnPaintBackground(e);
+            }
         }
 
         protected override void OnPaint(PaintEventArgs e)
@@ -1654,6 +2372,18 @@ public class RemoteControlForm : Form
         {
             DoubleBuffered = true;
             Font = new Font("Segoe UI", 9f, FontStyle.Bold);
+        }
+
+        protected override void OnPaintBackground(PaintEventArgs e)
+        {
+            // Keep the rounded corners transparent to the navigation rail behind
+            // the button rather than filling them with the button's own color.
+            if (Parent != null) {
+                e.Graphics.Clear(Parent.BackColor);
+            }
+            else {
+                base.OnPaintBackground(e);
+            }
         }
 
         protected override void OnPaint(PaintEventArgs e)

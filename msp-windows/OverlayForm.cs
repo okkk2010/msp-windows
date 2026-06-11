@@ -16,6 +16,7 @@ public class OverlayForm : Form
 
 
     private string targetProcessName;
+    private IntPtr currentTargetHwnd;
     private System.Windows.Forms.Timer windowTrackerTimer;
     private HotkeyManager hotkeyManager;
 
@@ -104,7 +105,16 @@ public class OverlayForm : Form
 
     private void TrackGameWindow(object sender, EventArgs e)
     {
-        Rectangle gameBounds = WindowTracker.GetGameWindowBounds(targetProcessName);
+        // Follow whichever external program is currently focused. Focusing our own
+        // overlay/control window returns Zero, so the overlay stays on the last target.
+        IntPtr foreground = WindowTracker.GetForegroundAppWindow();
+        if (foreground != IntPtr.Zero) {
+            currentTargetHwnd = foreground;
+        }
+
+        Rectangle gameBounds = currentTargetHwnd != IntPtr.Zero
+            ? WindowTracker.GetWindowBoundsByHandle(currentTargetHwnd)
+            : WindowTracker.GetGameWindowBounds(targetProcessName);
 
         if (gameBounds.IsEmpty) {
             this.Hide();

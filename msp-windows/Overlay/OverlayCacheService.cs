@@ -27,6 +27,24 @@ namespace msp_windows.Overlay
             File.WriteAllText(path, overlayJson, Encoding.UTF8);
         }
 
+        public bool DeleteOverlayJson(string code)
+        {
+            if (string.IsNullOrWhiteSpace(code)) return false;
+
+            string path = Path.Combine(RootCacheDirectoryPath, $"{code}.json");
+            try {
+                if (File.Exists(path)) {
+                    File.Delete(path);
+                    return true;
+                }
+            }
+            catch {
+                return false;
+            }
+
+            return false;
+        }
+
         public string TryLoadOverlayJson(string code)
         {
             if (string.IsNullOrWhiteSpace(code)) return null;
