@@ -74,7 +74,6 @@ public class RemoteControlForm : Form
     private Label localCountLabel;
     private TextBox librarySearchBox;
     private TextBox fullLibrarySearchBox;
-    private ComboBox platformFilter;
     private Panel activePreviewCanvas;
     private Panel homePage;
     private Panel libraryPage;
@@ -346,7 +345,7 @@ public class RemoteControlForm : Form
 
     private void BuildLibraryPage(Panel content)
     {
-        var header = CreateHeader("Library", "Browse saved overlays with platform and category filters.");
+        var header = CreateHeader("Library", "Browse your saved Windows overlays.");
         header.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
         header.Left = 32;
         header.Top = 24;
@@ -386,12 +385,6 @@ public class RemoteControlForm : Form
         fullLibrarySearchBox.PlaceholderTextCompat(SearchPlaceholder);
         fullLibrarySearchBox.TextChanged += (s, e) => RefreshLibraryColumns();
         libraryCard.Controls.Add(fullSearchHost);
-
-        platformFilter = CreateComboBox(304, 64, 170);
-        platformFilter.Items.AddRange(new object[] { "All platforms", "Windows" });
-        platformFilter.SelectedIndex = 0;
-        platformFilter.SelectedIndexChanged += (s, e) => RefreshLibraryColumns();
-        libraryCard.Controls.Add(platformFilter);
 
         // CLOUD (left) and LOCAL (right) are shown as two separate columns.
         var cloudHeader = BuildColumnHeader("Cloud", "Saved to your account", out cloudCountLabel);
@@ -881,7 +874,7 @@ public class RemoteControlForm : Form
             overlayItems.RemoveAll(item => item.Source == OverlaySource.Library);
             int savedOrder = 0;
             foreach (var item in resp.Data) {
-                if (item?.Overlay == null) {
+                if (item?.Overlay == null || !IsWindowsPlatform(item.Overlay.Platform)) {
                     continue;
                 }
 
@@ -938,8 +931,7 @@ public class RemoteControlForm : Form
             throw new InvalidDataException("Server response does not include overlayJson.");
         }
 
-        if (!string.IsNullOrWhiteSpace(overlay.Platform)
-            && !string.Equals(overlay.Platform.Trim(), "windows", StringComparison.OrdinalIgnoreCase)) {
+        if (!IsWindowsPlatform(overlay.Platform)) {
             throw new InvalidDataException("Unsupported overlay platform.");
         }
 
@@ -959,37 +951,52 @@ public class RemoteControlForm : Form
         appSettingsService.UpdateLastSelectedOverlayId(GetOverlaySelectionId(overlay, doc.OverlayId));
     }
 
-    private async Task ApplyLibraryOverlayAsync(OverlaySelectionItem item)
+    // Fetches a cloud overlay through the same code endpoint as "Load by code".
+    private async Task<OverlayDetailResponse> FetchOverlayByCodeAsync(OverlaySelectionItem item)
     {
-        if (item == null || item.OverlayDatabaseId <= 0) {
-            return;
+        string code = (item?.Code ?? string.Empty).Trim().ToUpperInvariant();
+        if (!OverlayCodeRegex.IsMatch(code)) {
+            UpdateSelectedOverlayUi("This overlay has no valid share code.");
+            return null;
         }
 
-        if (string.IsNullOrWhiteSpace(accessToken)) {
-            UpdateSelectedOverlayUi("Login is required.");
-            return;
-        }
-
-        UpdateSelectedOverlayUi("Applying overlay...");
         var settings = appSettingsService.Current ?? appSettingsService.LoadOrCreate();
 
         using (var api = new MspApiClient(settings.ServerBaseUrl))
         {
-            var resp = await api.GetOverlayDetailAsync(item.OverlayDatabaseId, accessToken).ConfigureAwait(true);
+            var resp = await api.GetOverlayByCodeAsync(code).ConfigureAwait(true);
             if (resp == null || !resp.Success || resp.Data == null) {
-                UpdateSelectedOverlayUi(resp?.Message ?? "Overlay detail request failed.");
-                return;
+                UpdateSelectedOverlayUi(resp?.Message ?? "Failed to load overlay.");
+                return null;
             }
 
-            try {
-                ApplyOverlayResponse(resp.Data, item.Code);
-                AddOrSelectLoadedOverlay(resp.Data);
-                UpdateSelectedOverlayUi("Selected: " + item.DisplayName);
-            }
-            catch (Exception ex) {
-                UpdateSelectedOverlayUi(BuildFriendlyApplyError(ex));
-                ErrorLogger.LogError("E221", "Library overlay apply failed: " + ex);
-            }
+            return resp.Data;
+        }
+    }
+
+    // Cloud Run: downloads (saves) the overlay by code, then applies it. Returns false on failure.
+    private async Task<bool> ApplyLibraryOverlayAsync(OverlaySelectionItem item)
+    {
+        if (item == null) {
+            return false;
+        }
+
+        UpdateSelectedOverlayUi("Applying overlay...");
+        var detail = await FetchOverlayByCodeAsync(item).ConfigureAwait(true);
+        if (detail == null) {
+            return false;
+        }
+
+        try {
+            ApplyOverlayResponse(detail, item.Code);
+            AddOrSelectLoadedOverlay(detail);
+            UpdateSelectedOverlayUi("Selected: " + item.DisplayName);
+            return true;
+        }
+        catch (Exception ex) {
+            UpdateSelectedOverlayUi(BuildFriendlyApplyError(ex));
+            ErrorLogger.LogError("E221", "Library overlay apply failed: " + ex);
+            return false;
         }
     }
 
@@ -1112,7 +1119,10 @@ public class RemoteControlForm : Form
 
         string usageCode = item.Code;
         if (item.Source == OverlaySource.Library) {
-            await ApplyLibraryOverlayAsync(item);
+            // Cloud Run: save the overlay locally first, then start it.
+            if (!await ApplyLibraryOverlayAsync(item)) {
+                return;
+            }
         }
         else {
             ApplyCachedOverlay(item);
@@ -1176,49 +1186,42 @@ public class RemoteControlForm : Form
         UpdateSelectedOverlayUi("Deleted: " + item.DisplayName);
     }
 
+    // Cloud Download: fetches the overlay by its share code and keeps a local copy (no apply).
     private async Task DownloadCloudOverlayAsync(OverlaySelectionItem item)
     {
-        if (item == null || item.Source != OverlaySource.Library || item.OverlayDatabaseId <= 0) {
-            return;
-        }
-
-        if (string.IsNullOrWhiteSpace(accessToken)) {
-            UpdateSelectedOverlayUi("Login is required.");
+        if (item == null || item.Source != OverlaySource.Library) {
             return;
         }
 
         UpdateSelectedOverlayUi("Downloading: " + item.DisplayName);
-        var settings = appSettingsService.Current ?? appSettingsService.LoadOrCreate();
+        var detail = await FetchOverlayByCodeAsync(item).ConfigureAwait(true);
+        if (detail == null) {
+            return;
+        }
 
-        using (var api = new MspApiClient(settings.ServerBaseUrl))
-        {
-            var resp = await api.GetOverlayDetailAsync(item.OverlayDatabaseId, accessToken).ConfigureAwait(true);
-            if (resp == null || !resp.Success || resp.Data == null) {
-                UpdateSelectedOverlayUi(resp?.Message ?? "Download failed.");
-                return;
+        try {
+            if (string.IsNullOrWhiteSpace(detail.OverlayJson)) {
+                throw new InvalidDataException("Server response does not include overlayJson.");
             }
 
-            try {
-                var detail = resp.Data;
-                if (string.IsNullOrWhiteSpace(detail.OverlayJson)) {
-                    throw new InvalidDataException("Server response does not include overlayJson.");
-                }
-
-                string cacheCode = string.IsNullOrWhiteSpace(detail.Code)
-                    ? (item.Code ?? string.Empty).Trim().ToUpperInvariant()
-                    : detail.Code.Trim().ToUpperInvariant();
-
-                overlayCacheService.SaveOverlayJson(cacheCode, detail.OverlayJson);
-                overlayDocumentCache.Remove(cacheCode);
-                detail.Code = cacheCode;
-
-                AddLocalOverlay(detail, select: false);
-                UpdateSelectedOverlayUi("Downloaded: " + item.DisplayName);
+            if (!IsWindowsPlatform(detail.Platform)) {
+                throw new InvalidDataException("Unsupported overlay platform.");
             }
-            catch (Exception ex) {
-                UpdateSelectedOverlayUi(BuildFriendlyApplyError(ex));
-                ErrorLogger.LogError("E222", "Cloud overlay download failed: " + ex.Message);
-            }
+
+            string cacheCode = string.IsNullOrWhiteSpace(detail.Code)
+                ? (item.Code ?? string.Empty).Trim().ToUpperInvariant()
+                : detail.Code.Trim().ToUpperInvariant();
+
+            overlayCacheService.SaveOverlayJson(cacheCode, detail.OverlayJson);
+            overlayDocumentCache.Remove(cacheCode);
+            detail.Code = cacheCode;
+
+            AddLocalOverlay(detail, select: false);
+            UpdateSelectedOverlayUi("Downloaded: " + item.DisplayName);
+        }
+        catch (Exception ex) {
+            UpdateSelectedOverlayUi(BuildFriendlyApplyError(ex));
+            ErrorLogger.LogError("E222", "Cloud overlay download failed: " + ex.Message);
         }
     }
 
@@ -1366,7 +1369,7 @@ public class RemoteControlForm : Form
     // Home quick-run list: locally downloaded overlays only, most-recently-used first.
     private void PopulateHomeQuickList(FlowLayoutPanel panel)
     {
-        var local = SortLocal(FilterOverlayItems(librarySearchBox?.Text, "Local", null));
+        var local = SortLocal(FilterOverlayItems(librarySearchBox?.Text, "Local"));
 
         if (local.Count == 0) {
             panel.Controls.Add(overlayItems.Count == 0
@@ -1383,8 +1386,7 @@ public class RemoteControlForm : Form
     // Library tab left column: cloud (account) overlays without a local copy.
     private void PopulateCloudColumn(FlowLayoutPanel panel)
     {
-        string platform = platformFilter?.SelectedItem as string;
-        var cloud = SortCloud(FilterOverlayItems(fullLibrarySearchBox?.Text, null, platform)
+        var cloud = SortCloud(FilterOverlayItems(fullLibrarySearchBox?.Text, null)
             .Where(i => i.Source == OverlaySource.Library && !HasLocalCopy(i)));
 
         if (cloudCountLabel != null) {
@@ -1404,8 +1406,7 @@ public class RemoteControlForm : Form
     // Library tab right column: overlays downloaded to this PC.
     private void PopulateLocalColumn(FlowLayoutPanel panel)
     {
-        string platform = platformFilter?.SelectedItem as string;
-        var local = SortLocal(FilterOverlayItems(fullLibrarySearchBox?.Text, null, platform)
+        var local = SortLocal(FilterOverlayItems(fullLibrarySearchBox?.Text, null)
             .Where(i => i.Source == OverlaySource.LocalCache));
 
         if (localCountLabel != null) {
@@ -1454,9 +1455,10 @@ public class RemoteControlForm : Form
             .ToList();
     }
 
-    private List<OverlaySelectionItem> FilterOverlayItems(string search, string category, string platform)
+    // The Windows client only handles Windows overlays, so non-Windows items are always excluded.
+    private List<OverlaySelectionItem> FilterOverlayItems(string search, string category)
     {
-        IEnumerable<OverlaySelectionItem> items = overlayItems;
+        IEnumerable<OverlaySelectionItem> items = overlayItems.Where(i => IsWindowsPlatform(i.Platform));
 
         if (!string.IsNullOrWhiteSpace(search) && !string.Equals(search, SearchPlaceholder, StringComparison.Ordinal)) {
             string needle = search.Trim().ToLowerInvariant();
@@ -1473,12 +1475,13 @@ public class RemoteControlForm : Form
             items = items.Where(i => i.Source == OverlaySource.Library);
         }
 
-        if (string.Equals(platform, "Windows", StringComparison.Ordinal)) {
-            items = items.Where(i => string.IsNullOrWhiteSpace(i.Platform)
-                || string.Equals(i.Platform.Trim(), "windows", StringComparison.OrdinalIgnoreCase));
-        }
-
         return items.ToList();
+    }
+
+    private static bool IsWindowsPlatform(string platform)
+    {
+        return string.IsNullOrWhiteSpace(platform)
+            || string.Equals(platform.Trim(), "windows", StringComparison.OrdinalIgnoreCase);
     }
 
     private Control CreateMessageRow(string title, string meta)
